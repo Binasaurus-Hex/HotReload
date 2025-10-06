@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:dynlib"
 import "core:os"
 import "core:os/os2"
+import path "core:path/filepath"
 import rl "vendor:raylib"
 
 GameAPI :: struct {
@@ -43,11 +44,17 @@ build_api :: proc(version: int) -> (path: string, success: bool) {
 
 main :: proc(){
 
+    assert(ODIN_OS == .Windows, "Only tested on windows, remove this if you want to go fix it for your OS")
+
     apis: [dynamic]GameAPI
     api_version: int
     started: bool
     state: []u8
     api: GameAPI
+
+    raylib_dll := path.join({ODIN_ROOT, "vendor", "raylib", "windows", "raylib.dll"})
+    copy_err := os2.copy_file("raylib.dll", raylib_dll)
+    assert(copy_err == nil)
 
     for {
 
@@ -75,9 +82,6 @@ main :: proc(){
         reload := api.run()
 
         if reload do state = api.save()
-
-        // dynlib.unload_library(api._game_api_handle)
-
 
         free_all(context.temp_allocator)
 
