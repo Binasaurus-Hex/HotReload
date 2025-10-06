@@ -25,24 +25,3 @@ append_to_static :: proc(static_string: ^StaticString($T), value: string){
 equal_to_static :: proc(static_string: ^StaticString($T), value: string) -> bool {
     return static_to_string(static_string) == value
 }
-
-StaticArray :: struct($capacity: int, $T: typeid){
-    buffer: [capacity]T,
-    length: int
-}
-
-append_static :: proc(array: ^StaticArray($S, $T), value: T){
-    array.buffer[array.length] = value
-    array.length += 1
-}
-
-unordered_remove_static :: proc(array: ^StaticArray($S, $T), index: int){
-    last := array.buffer[array.length - 1]
-    array.buffer[index] = last
-    array.length -= 1
-}
-
-
-get_slice :: proc "contextless" (array: ^StaticArray($S, $T)) -> []T {
-    return array.buffer[:array.length]
-}

@@ -10,6 +10,8 @@ import "core:strings"
 import "base:intrinsics"
 import "core:thread"
 
+import sa "core:container/small_array"
+
 discover_types :: proc(type: typeid , types: ^[dynamic]typeid){
 
     type_info := type_info_of(type)
@@ -53,7 +55,7 @@ SaveField :: struct {
 
 SaveStruct :: struct {
     name: StaticString(100),
-    fields: StaticArray(400, SaveField),
+    fields: sa.Small_Array(400, SaveField),
 }
 
 SaveEnumField :: struct {
@@ -63,12 +65,12 @@ SaveEnumField :: struct {
 
 SaveEnum :: struct {
     name: StaticString(100),
-    fields: StaticArray(200, SaveEnumField)
+    fields: sa.Small_Array(200, SaveEnumField)
 }
 
 SaveHeader :: struct {
-    structs: StaticArray(200, SaveStruct),
-    enums: StaticArray(200, SaveEnum),
+    structs: sa.Small_Array(200, SaveStruct),
+    enums: sa.Small_Array(200, SaveEnum),
     data_size: int
 }
 
@@ -102,9 +104,9 @@ serialize :: proc(state: ^$T, allocator := context.allocator) -> []u8 {
                     save_field.elem_size = transmute(int)(v.tag_offset)
                 }
 
-                append_static(&save_struct.fields, save_field)
+                sa.append(&save_struct.fields, save_field)
             }
-            append_static(&header.structs, save_struct)
+            sa.append(&header.structs, save_struct)
         }
         if reflect.is_enum(type_info){
 
@@ -115,10 +117,10 @@ serialize :: proc(state: ^$T, allocator := context.allocator) -> []u8 {
                 write_to_static(&save_field.name, field.name)
                 save_field.value = i64(field.value)
 
-                append_static(&save_enum.fields, save_field)
+                sa.append(&save_enum.fields, save_field)
             }
 
-            append_static(&header.enums, save_enum)
+            sa.append(&header.enums, save_enum)
         }
     }
 
@@ -136,8 +138,8 @@ deserialize :: proc(state: ^$T, data: []u8){
 
     save_header     := cast(^SaveHeader) &data[0]
     saved_state     := data[size_of(SaveHeader):size_of(SaveHeader) + save_header.data_size]
-    saved_structs   := get_slice(&save_header.structs)
-    saved_enums     := get_slice(&save_header.enums)
+    saved_structs   := sa.slice(&save_header.structs)
+    saved_enums     := sa.slice(&save_header.enums)
 
     when USE_TIMING {
         start := time.now()
@@ -338,7 +340,7 @@ write_across :: proc(using ctx: ^Deserialization_Context, saved: uintptr, actual
             }
         }
 
-        for &saved_field in get_slice(&save_struct.fields) {
+        for &saved_field in sa.slice(&save_struct.fields) {
             if static_to_string(&saved_field.name) == field_name {
                 when USE_CACHING {
                     struct_fields[key] = &saved_field
@@ -351,7 +353,7 @@ write_across :: proc(using ctx: ^Deserialization_Context, saved: uintptr, actual
 
     enums_equal :: proc(saved_size: int, saved: ^SaveEnum, actual: ^runtime.Type_Info) -> bool {
         if saved_size != actual.size do return false
-        saved_fields := get_slice(&saved.fields)
+        saved_fields := sa.slice(&saved.fields)
         actual_fields := reflect.enum_fields_zipped(actual.id)
         if len(saved_fields) != len(actual_fields) do return false
 
@@ -430,7 +432,7 @@ write_across :: proc(using ctx: ^Deserialization_Context, saved: uintptr, actual
 
                     count := min(saved_field.size / saved_field.elem_size, v.count)
 
-                    for &saved_index_field in get_slice(&saved_enum.fields) {
+                    for &saved_index_field in sa.slice(&saved_enum.fields) {
                         saved_name := static_to_string(&saved_index_field.name)
                         for actual_field in reflect.enum_fields_zipped(v.index.id) {
                             if saved_name != actual_field.name do continue
@@ -485,7 +487,7 @@ write_across :: proc(using ctx: ^Deserialization_Context, saved: uintptr, actual
 
         save_field: ^SaveEnumField
         saved_name: string
-        for &field in get_slice(&saved_enum.fields){
+        for &field in sa.slice(&saved_enum.fields){
             if field.value != saved_value^ do continue
             save_field = &field
             saved_name = static_to_string(&field.name)
@@ -521,7 +523,7 @@ write_across :: proc(using ctx: ^Deserialization_Context, saved: uintptr, actual
             return true
         }
 
-        for &saved_field in get_slice(&saved_enum.fields) {
+        for &saved_field in sa.slice(&saved_enum.fields) {
             _byte :u64 = u64(saved_field.value / 8)
             bit :u64 = u64(saved_field.value % 8)
 
