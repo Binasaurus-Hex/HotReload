@@ -1,45 +1,66 @@
 package main
 
 import "core:fmt"
+import "core:time"
+import "core:strings"
 import "core:dynlib"
 import "core:os"
 import "core:os/os2"
 import path "core:path/filepath"
-import rl "vendor:raylib"
 
 GameAPI :: struct {
-    init_window: proc(),
-    run: proc() -> bool,
+    init_window: proc() -> rawptr,
+    set_window_state: proc(rawptr),
+    run: proc(bool, string) -> bool,
     save: proc() -> []u8,
     load: proc(state: []u8),
 
     _game_api_handle: dynlib.Library
 }
 
+Backend :: enum {
+    Raylib, Karl2D
+}
+
+BACKEND :: Backend.Raylib
+
 get_api_path :: proc(version: int) -> string {
     return fmt.tprintf("game_{}.dll", version)
 }
 
-build_api :: proc(version: int) -> (path: string, success: bool) {
+build_api :: proc(version: int) -> (path: string, error_string: string, success: bool) {
+
+    start := time.now()
+    defer {
+        fmt.printfln("build took : {}s", time.duration_seconds(time.since(start)))
+    }
 
     path = get_api_path(version)
     output := fmt.tprint("-out=", path)
+
+    game_folder := "game" if BACKEND == .Raylib else "game_karl2d"
+
     process_description := os2.Process_Desc {
         command = {
             "odin",
             "build",
-            "game",
+            game_folder,
+            "-o=none",
+            "-linker=radlink",
             "-build-mode=dll",
-            "-define:RAYLIB_SHARED=true",
+            "-define:RAYLIB_SHARED=true" if BACKEND == .Raylib else "",
             "-extra-linker-flags=/NOEXP /NOIMPLIB",
             output
             }
     }
-    process, err := os2.process_start(process_description)
+
+    state, std_out, std_err, err := os2.process_exec(process_description, context.temp_allocator)
     assert(err == nil)
-    state, wait_err := os2.process_wait(process)
-    assert(wait_err == nil)
-    return path, state.exit_code == 0
+    error_string = string(std_err)
+
+    fmt.println(error_string)
+
+    return path, error_string, state.exit_code == 0
 }
 
 main :: proc(){
@@ -52,13 +73,18 @@ main :: proc(){
     state: []u8
     api: GameAPI
 
-    raylib_dll := path.join({ODIN_ROOT, "vendor", "raylib", "windows", "raylib.dll"})
-    copy_err := os2.copy_file("raylib.dll", raylib_dll)
-    assert(copy_err == nil)
+    if BACKEND == .Raylib {
+        raylib_dll := path.join({ODIN_ROOT, "vendor", "raylib", "windows", "raylib.dll"})
+        copy_err := os2.copy_file("raylib.dll", raylib_dll)
+        assert(copy_err == nil)
+    }
+
+    window_state: rawptr
 
     for {
 
-        if dll_path, success := build_api(api_version); success {
+        dll_path, error_string, success := build_api(api_version)
+        if success {
             api = {}
             count, ok := dynlib.initialize_symbols(&api, dll_path, "", "_game_api_handle")
             append(&apis, api)
@@ -70,16 +96,16 @@ main :: proc(){
 
 
         if started {
+            api.set_window_state(window_state)
             api.load(state)
         }
 
         if !started {
-            api.init_window()
+            window_state = api.init_window()
             started = true
         }
 
-
-        reload := api.run()
+        reload := api.run(!success, error_string)
 
         if reload do state = api.save()
 
@@ -89,9 +115,9 @@ main :: proc(){
     }
 
     for api, i in apis {
-		if !dynlib.unload_library(api._game_api_handle) {
-			fmt.printfln("Failed unloading lib: {0}", dynlib.last_error())
-		}
+        if !dynlib.unload_library(api._game_api_handle) {
+            fmt.printfln("Failed unloading lib: {0}", dynlib.last_error())
+        }
 
         dll := fmt.tprintf("game_{}.dll", i)
         err: os2.Error

@@ -25,3 +25,33 @@ append_to_static :: proc(static_string: ^StaticString($T), value: string){
 equal_to_static :: proc(static_string: ^StaticString($T), value: string) -> bool {
     return static_to_string(static_string) == value
 }
+
+
+// timer
+
+Timer :: struct {
+    time: f32,
+    elapsed: f32,
+
+    loop: bool,
+    running: bool
+}
+
+timer_start :: proc(time: f32, loop: bool = true) -> Timer {
+    return Timer {time, 0, loop, true }
+}
+
+timer_update :: proc(timer: ^Timer, delta: f32) -> (complete: bool){
+    if !timer.running {
+        return
+    }
+    timer.elapsed += delta
+    if timer.elapsed > timer.time {
+        complete = true
+        timer.elapsed = 0
+        if !timer.loop {
+            timer.running = false
+        }
+    }
+    return
+}

@@ -9,7 +9,6 @@ import "core:time"
 import "core:strings"
 import "base:intrinsics"
 import "core:thread"
-
 import sa "core:container/small_array"
 
 discover_types :: proc(type: typeid , types: ^[dynamic]typeid){
@@ -25,6 +24,11 @@ discover_types :: proc(type: typeid , types: ^[dynamic]typeid){
             array_info := reflect.type_info_base(type_info).variant.(reflect.Type_Info_Array)
             discover_types(array_info.elem.id, types)
             return
+        case reflect.is_enumerated_array(type_info):
+            array_info := reflect.type_info_base(type_info).variant.(reflect.Type_Info_Enumerated_Array)
+            discover_types(array_info.elem.id, types)
+            discover_types(array_info.index.id, types)
+            return
 
         case reflect.is_bit_set(type_info):
             bit_set_info := reflect.type_info_base(type_info).variant.(reflect.Type_Info_Bit_Set)
@@ -32,6 +36,7 @@ discover_types :: proc(type: typeid , types: ^[dynamic]typeid){
             return
 
         case reflect.is_enum(type_info):
+
 
         case:
             return
@@ -45,12 +50,23 @@ discover_types :: proc(type: typeid , types: ^[dynamic]typeid){
     append(types, type)
 }
 
+
+
 SaveField :: struct {
     name: StaticString(100),
     type: StaticString(100),
     offset: uintptr,
     size: int,
     elem_size: int,
+}
+
+Struct_Id :: distinct int
+Enum_Id :: distinct int
+Union_Id :: distinct int
+Array_Id :: distinct int
+
+Type_Id :: union {
+    Struct_Id, Enum_Id, Union_Id, Array_Id
 }
 
 SaveStruct :: struct {
@@ -72,6 +88,30 @@ SaveHeader :: struct {
     structs: sa.Small_Array(200, SaveStruct),
     enums: sa.Small_Array(200, SaveEnum),
     data_size: int
+}
+
+save_to_file :: proc(v: ^$T, filename: string){
+    bytes := serialize(v)
+    defer delete(bytes)
+    handle, err := os.open(filename, os.O_CREATE)
+    assert(err == os.ERROR_NONE)
+    defer os.close(handle)
+    os.write(handle, bytes)
+}
+
+load_from_file :: proc(v: ^$T, filename: string){
+    if !os.is_file(filename) do return
+
+    handle, open_err := os.open(filename)
+    assert(open_err == os.ERROR_NONE)
+    defer os.close(handle)
+
+    data, read_err := os.read_entire_file_or_err(handle)
+    assert(read_err == os.ERROR_NONE)
+
+    deserialize(v, data)
+
+    delete(data)
 }
 
 serialize :: proc(state: ^$T, allocator := context.allocator) -> []u8 {
@@ -157,11 +197,15 @@ deserialize :: proc(state: ^$T, data: []u8){
 
     write_across(&ctx, uintptr(&saved_state[0]), uintptr(state), type_info_of(T), len(saved_state))
 
-    // fmt.println("IDENTICAL ------")
-    // for v, i in ctx.identical {
-    //     fmt.println(v, " : ", i)
-    // }
-    // fmt.println("---------------")
+    SHOW_IDENTICAL :: false
+
+    when SHOW_IDENTICAL {
+    fmt.println("IDENTICAL ------")
+    for v, i in ctx.identical {
+        fmt.println(v, " : ", i)
+    }
+    fmt.println("---------------")
+    }
 }
 
 Deserialization_Context :: struct {
@@ -240,6 +284,7 @@ parapoly_equal :: proc(a, b: PolyStruct) -> bool {
 }
 
 write_across :: proc(using ctx: ^Deserialization_Context, saved: uintptr, actual: uintptr, type: ^runtime.Type_Info, saved_size: int) -> bool {
+
 
     find_matching_struct :: proc(using ctx: ^Deserialization_Context, type: ^runtime.Type_Info) -> (result: ^SaveStruct, ok: bool) {
         when USE_TIMING {
@@ -425,9 +470,10 @@ write_across :: proc(using ctx: ^Deserialization_Context, saved: uintptr, actual
                     continue
 
                 case runtime.Type_Info_Enumerated_Array:
-                    if identical[v.index.id] do break
+                    // if identical[v.index.id] && identical[v.elem.id] do break
 
-                    saved_enum := find_matching_enum(ctx, v.index) or_break
+                    saved_enum, found_matching_enum := find_matching_enum(ctx, v.index)
+                    assert(found_matching_enum, fmt.tprint(v.index))
                     array_identical: int
 
                     count := min(saved_field.size / saved_field.elem_size, v.count)
@@ -501,9 +547,43 @@ write_across :: proc(using ctx: ^Deserialization_Context, saved: uintptr, actual
 
         return false
 
+    case reflect.is_enumerated_array(type):
+        v := type.variant.(reflect.Type_Info_Enumerated_Array)
+
+        if identical[v.index.id] && identical[v.elem.id] do break
+
+        saved_enum, found_matching_enum := find_matching_enum(ctx, v.index)
+        assert(found_matching_enum, fmt.tprint(v.index))
+        array_identical: int
+
+        saved_elem_size := saved_size / sa.len(saved_enum.fields)
+
+        count := min(sa.len(saved_enum.fields), v.count)
+
+
+        for &saved_index_field in sa.slice(&saved_enum.fields) {
+            saved_name := static_to_string(&saved_index_field.name)
+            for actual_field in reflect.enum_fields_zipped(v.index.id) {
+                if saved_name != actual_field.name do continue
+                array_saved := saved + uintptr(int(saved_index_field.value) * saved_elem_size)
+                array_actual := actual + uintptr(int(actual_field.value) * v.elem_size)
+
+                if write_across(ctx, array_saved, array_actual, v.elem, saved_elem_size){
+                    array_identical += 1
+                }
+            }
+        }
+
+        if array_identical == count {
+            identical[type.id] = true
+            return true
+        }
+        return false
+
+
     case reflect.is_union(type):
         union_info := type.variant.(reflect.Type_Info_Union)
-        fmt.println(union_info)
+
 
     case reflect.is_bit_set(type):
 
