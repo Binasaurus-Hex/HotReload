@@ -59,11 +59,14 @@ get_default_state :: proc() -> GameState {
     return state
 }
 
-check_reload :: proc(start_time: time.Time) -> bool {
+check_reload :: proc(start_time: time.Time, path := #directory) -> bool {
 
-    files, read_err := os2.read_all_directory_by_path(#directory, context.temp_allocator)
+    files, read_err := os2.read_all_directory_by_path(path, context.temp_allocator)
     assert(read_err == nil, fmt.tprint(read_err))
     for file in files {
+        if file.type == .Directory {
+            if check_reload(start_time, file.fullpath) do return true
+        }
         if !strings.has_suffix(file.name, ".odin") do continue
         if file.modification_time._nsec > start_time._nsec do return true
     }
@@ -74,12 +77,14 @@ render_size :: proc() -> [2]f32 {
     return { f32(rl.GetRenderWidth()), f32(rl.GetRenderHeight()) }
 }
 
+default_font: rl.Font
+FONT_SIZE :: 28
+
 @export
 run :: proc(error: bool, error_string: string) -> (reload: bool) {
 
     error_string := strings.clone(error_string, context.allocator)
-    FONT_SIZE :: 28
-    default_font := rl.LoadFontEx("game/PCTL.ttf", FONT_SIZE, nil, 0)
+    default_font = rl.LoadFontEx("game/PCTL.ttf", FONT_SIZE, nil, 0)
 
     start_time := time.now()
 
@@ -116,6 +121,8 @@ run :: proc(error: bool, error_string: string) -> (reload: bool) {
 
         rl.EndMode2D()
 
+        test_serialization()
+
         if reload_timer.running {
             rl.DrawTextEx(default_font, "reloaded", { render_size().x / 2, 0 }, FONT_SIZE, 1, rl.ColorBrightness(rl.GREEN, .2))
         }
@@ -127,6 +134,7 @@ run :: proc(error: bool, error_string: string) -> (reload: bool) {
 
         rl.EndDrawing()
         free_all(context.temp_allocator)
+        log_y_offset = 20
     }
     return
 }
@@ -199,4 +207,43 @@ editor :: proc(delta: f32){
             camera.offset = rl.GetMousePosition()
         }
     }
+}
+
+log_y_offset: int
+log :: proc(args: ..any, sep := " "){
+    str := fmt.ctprint(..args, sep=sep)
+    rl.DrawTextEx(default_font, str, { f32(20), f32(log_y_offset) }, FONT_SIZE, 1, rl.ColorBrightness(rl.BLUE, .8))
+    log_y_offset += FONT_SIZE
+}
+
+test_serialization :: proc(){
+    TestStruct1 :: struct {
+        position, velocity: [2]f32,
+        data: [10]int,
+        timer: Timer,
+    }
+
+    test_struct := TestStruct1 {
+        position = { 1, 2 },
+        velocity = {3, 4 },
+        timer = timer_start(2, true)
+    }
+
+    bytes := serialize_2(&test_struct)
+
+
+    TestStruct2 :: struct {
+        position, velocity: [2]f32,
+        health: f32,
+        timer: Timer
+    }
+
+    replicated := TestStruct2 {}
+    deserialize_2(&replicated, bytes)
+
+    log("")
+    log("")
+
+    log(test_struct)
+    log(replicated)
 }

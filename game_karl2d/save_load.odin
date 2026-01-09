@@ -12,23 +12,23 @@ import "core:thread"
 
 import sa "core:container/small_array"
 
-discover_types :: proc(type: typeid , types: ^[dynamic]typeid){
+discover_types_raw :: proc(type: typeid , types: ^[dynamic]typeid){
 
     type_info := type_info_of(type)
 
     switch {
         case reflect.is_struct(type_info):
             for field in reflect.struct_fields_zipped(type){
-                discover_types(field.type.id, types)
+                discover_types_raw(field.type.id, types)
             }
         case reflect.is_array(type_info):
             array_info := reflect.type_info_base(type_info).variant.(reflect.Type_Info_Array)
-            discover_types(array_info.elem.id, types)
+            discover_types_raw(array_info.elem.id, types)
             return
 
         case reflect.is_bit_set(type_info):
             bit_set_info := reflect.type_info_base(type_info).variant.(reflect.Type_Info_Bit_Set)
-            discover_types(bit_set_info.elem.id, types)
+            discover_types_raw(bit_set_info.elem.id, types)
             return
 
         case reflect.is_enum(type_info):
@@ -77,7 +77,7 @@ SaveHeader :: struct {
 serialize :: proc(state: ^$T, allocator := context.allocator) -> []u8 {
 
     types :[dynamic]typeid
-    discover_types(type_of(state^), &types)
+    discover_types_raw(type_of(state^), &types)
 
     header := new(SaveHeader)
 
