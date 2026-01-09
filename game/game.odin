@@ -217,24 +217,44 @@ log :: proc(args: ..any, sep := " "){
 }
 
 test_serialization :: proc(){
+
+    Blob :: struct {
+        height: f32
+    }
+
+    Height :: enum {
+        LOW, MEDIUM, HIGH
+    }
+
     TestStruct1 :: struct {
         position, velocity: [2]f32,
-        data: [10]int,
+        data: [2]Blob,
+        heights: [2]Height,
         timer: Timer,
     }
 
     test_struct := TestStruct1 {
         position = { 1, 2 },
         velocity = {3, 4 },
+        heights = {.MEDIUM, .LOW },
+        data = {
+            Blob { 2 },
+            Blob { 3 },
+        },
         timer = timer_start(2, true)
     }
 
     bytes := serialize_2(&test_struct)
 
+    NewHeight :: enum {
+        LOW, MEDIUM, HIGH
+    }
 
     TestStruct2 :: struct {
         position, velocity: [2]f32,
-        health: f32,
+        data: [2]Blob,
+        heights: [2]NewHeight,
+        // health: f32,
         timer: Timer
     }
 

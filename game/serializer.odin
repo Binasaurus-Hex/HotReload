@@ -40,6 +40,21 @@ serialize_2 :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
                 })
             }
             save_info.variant = save_struct
+        case rt.Type_Info_Array:
+            save_info.variant = TypeInfo_Array {
+                elem = save_type(header, v.elem.id),
+                elem_size = v.elem_size,
+                count = v.count
+            }
+        case rt.Type_Info_Enum:
+            save_enum := TypeInfo_Enum {}
+            for field in reflect.enum_fields_zipped(type){
+                sa.append(&save_enum.fields, Enum_Field {
+                    name = to_index_string(&header.strings, field.name),
+                    value = i64(field.value)
+                })
+            }
+            save_info.variant = save_enum
         }
         sa.append(&header.types, save_info)
         return TypeInfo_Handle(sa.len(header.types))
@@ -105,34 +120,92 @@ deserialize_raw :: proc(header: ^SaveHeader2, src, dst: uintptr, src_type: TypeI
     saved_type, found_saved := get_typeinfo_base(header, src_type)
     assert(found_saved)
 
-    identical = true
+    dst_type := rt.type_info_base(dst_type)
 
-    switch {
-    case reflect.is_struct(dst_type):
-        saved_struct := (&saved_type.variant.(TypeInfo_Struct)) or_break
-        identical_fields: int = 0
+    if !saved_type.identical {
 
-        fields := reflect.struct_fields_zipped(dst_type.id)
-        for field in fields {
-            saved_field := find_matching_field(header, saved_struct, field.name) or_continue
-            if saved_field.offset != field.offset do identical = false
-            field_src := src + saved_field.offset
-            field_dst := dst + field.offset
-            if deserialize_raw(header, field_src, field_dst, saved_field.type, field.type){
-                identical_fields += 1
+        saved_type.identical = true
+
+        #partial switch v in dst_type.variant {
+        case rt.Type_Info_Struct:
+            saved_struct := (&saved_type.variant.(TypeInfo_Struct)) or_break
+
+            fields := reflect.struct_fields_zipped(dst_type.id)
+            for field in fields {
+                saved_field := find_matching_field(header, saved_struct, field.name) or_continue
+                if saved_field.offset != field.offset do saved_type.identical = false
+                field_src := src + saved_field.offset
+                field_dst := dst + field.offset
+                if !deserialize_raw(header, field_src, field_dst, saved_field.type, field.type){
+                    saved_type.identical = false
+                }
             }
+            return saved_type.identical
+
+        case rt.Type_Info_Array:
+            saved_array := (&saved_type.variant.(TypeInfo_Array)) or_break
+            count := min(saved_array.count, v.count)
+            for i in 0..<count {
+                elem_src := src + uintptr(i * saved_array.elem_size)
+                elem_dst := dst + uintptr(i * v.elem_size)
+
+                if !deserialize_raw(header, elem_src, elem_dst, saved_array.elem, v.elem) {
+                    saved_type.identical = false
+                }
+            }
+            return saved_type.identical
+
+        case rt.Type_Info_Enum:
+            saved_enum := (&saved_type.variant.(TypeInfo_Enum)) or_break
+            if saved_type.size != size_of(i64) do break
+            if dst_type.size != size_of(i64) do break
+
+            src_value := cast(^i64)src
+            dst_value := cast(^i64)dst
+
+            saved_fields := sa.slice(&saved_enum.fields)
+            actual_fields := reflect.enum_fields_zipped(dst_type.id)
+            
+            // identical check
+            check: {
+                if len(saved_fields) != len(actual_fields) do break check
+                for saved_field, i in saved_fields {
+                    actual_field := actual_fields[i]
+                    if saved_field.value != i64(actual_field.value) do break check
+                    saved_name := resolve_to_string(&header.strings, saved_field.name)
+                    if saved_name != actual_field.name do break check
+                }
+
+                // if the enum is identical, we can break out and treat it like a normal i64
+                break
+            }
+
+            // otherwise assumed to be a known, non identical enum, do the correct copy operation
+            saved_type.identical = false
+
+            saved_field: ^Enum_Field
+            for &field in saved_fields {
+                if field.value != src_value^ do continue
+                saved_field = &field
+                break
+            }
+
+            saved_name: string = resolve_to_string(&header.strings, saved_field.name)
+            for field in actual_fields {
+                if field.name != saved_name do continue
+                dst_value^ = i64(field.value)
+            }
+            return saved_type.identical
         }
-        if identical_fields != len(fields) do identical = false
-        return
     }
 
-    if saved_type.size != dst_type.size do identical = false
+    if saved_type.size != dst_type.size do saved_type.identical = false
 
     // fallback option
     log("|| falling through for", dst_type.id, " ||")
     size := min(saved_type.size, dst_type.size)
     mem.copy(rawptr(dst), rawptr(src), size)
-    return
+    return saved_type.identical
 }
 
 
@@ -175,6 +248,8 @@ discover_types_2 :: proc(type: typeid, allocator := context.temp_allocator) -> [
     return types[:]
 }
 
+// TYPE INFO
+
 TypeInfo_Handle :: distinct int
 
 Struct_Field :: struct {
@@ -187,6 +262,21 @@ TypeInfo_Struct :: struct {
     fields: sa.Small_Array(100, Struct_Field)
 }
 
+Enum_Field :: struct {
+    name: IndexString,
+    value: i64
+}
+
+TypeInfo_Enum :: struct {
+    fields: sa.Small_Array(100, Enum_Field),
+}
+
+TypeInfo_Array :: struct {
+    elem: TypeInfo_Handle,
+    elem_size: int,
+    count: int
+}
+
 TypeInfo_Named :: struct {
     name: IndexString,
     type: TypeInfo_Handle
@@ -195,9 +285,12 @@ TypeInfo_Named :: struct {
 TypeInfo :: struct {
     size: int,
     id: typeid,
+    identical: bool,
     variant: union {
         TypeInfo_Named,
-        TypeInfo_Struct
+        TypeInfo_Struct,
+        TypeInfo_Enum,
+        TypeInfo_Array,
     }
 }
 
