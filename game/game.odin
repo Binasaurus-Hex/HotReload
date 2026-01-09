@@ -219,24 +219,33 @@ log :: proc(args: ..any, sep := " "){
 test_serialization :: proc(){
 
     Blob :: struct {
-        height: f32
+        blobness: f32
     }
 
     Height :: enum {
         LOW, MEDIUM, HIGH
     }
 
+    Feature :: enum {
+        Burnable,
+        Eatable,
+        Cargo,
+    }
+
     TestStruct1 :: struct {
         position, velocity: [2]f32,
         data: [2]Blob,
-        heights: [2]Height,
+        altitude: [Height]f32,
+        features: bit_set[Feature],
         timer: Timer,
     }
 
     test_struct := TestStruct1 {
         position = { 1, 2 },
         velocity = {3, 4 },
-        heights = {.MEDIUM, .LOW },
+        altitude = {
+            .LOW = 1, .MEDIUM = 2.2, .HIGH = 4.20
+        },
         data = {
             Blob { 2 },
             Blob { 3 },
@@ -246,14 +255,23 @@ test_serialization :: proc(){
 
     bytes := serialize_2(&test_struct)
 
+    NewFeature :: enum {
+        Burnable,
+        Eatable,
+        Cargo,
+    }
+
     NewHeight :: enum {
-        LOW, MEDIUM, HIGH
+        LOW,
+        HIGH,
+        MEDIUM,
     }
 
     TestStruct2 :: struct {
         position, velocity: [2]f32,
         data: [2]Blob,
-        heights: [2]NewHeight,
+        altitude: [NewHeight]f32,
+        features: bit_set[NewFeature],
         // health: f32,
         timer: Timer
     }

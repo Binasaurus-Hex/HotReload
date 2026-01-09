@@ -8,7 +8,6 @@ import "core:fmt"
 import rl "vendor:raylib"
 
 serialize_2 :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
-    types := discover_types_2(T)
 
     header := new(SaveHeader2, context.temp_allocator)
 
@@ -30,6 +29,7 @@ serialize_2 :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
                 name = to_index_string(&header.strings, v.name),
                 type = save_type(header, v.base.id)
             }
+
         case rt.Type_Info_Struct:
             save_struct := TypeInfo_Struct {}
             for field in reflect.struct_fields_zipped(type){
@@ -40,12 +40,14 @@ serialize_2 :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
                 })
             }
             save_info.variant = save_struct
+
         case rt.Type_Info_Array:
             save_info.variant = TypeInfo_Array {
                 elem = save_type(header, v.elem.id),
                 elem_size = v.elem_size,
                 count = v.count
             }
+
         case rt.Type_Info_Enum:
             save_enum := TypeInfo_Enum {}
             for field in reflect.enum_fields_zipped(type){
@@ -55,14 +57,24 @@ serialize_2 :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
                 })
             }
             save_info.variant = save_enum
+
+        case rt.Type_Info_Enumerated_Array:
+            save_info.variant = TypeInfo_Enumerated_Array {
+                elem = save_type(header, v.elem.id),
+                index = save_type(header, v.index.id),
+                elem_size = v.elem_size,
+                count = v.count,
+            }
+        case rt.Type_Info_Bit_Set:
+            save_info.variant = TypeInfo_Bit_Set {
+                elem = save_type(header, v.elem.id),
+            }
         }
         sa.append(&header.types, save_info)
         return TypeInfo_Handle(sa.len(header.types))
     }
 
-    for type in types {
-        save_type(header, type)
-    }
+    save_type(header, T)
 
     for info, i in sa.slice(&header.types){
         log(i, ":", info.id)
@@ -116,6 +128,21 @@ find_matching_field :: proc(header: ^SaveHeader2, struct_info: ^TypeInfo_Struct,
     return nil, false
 }
 
+enum_identical :: proc(header: ^SaveHeader2, a: ^TypeInfo, b: ^rt.Type_Info) -> bool {
+    a := (&a.variant.(TypeInfo_Enum)) or_return
+    a_fields := sa.slice(&a.fields)
+    b_fields := reflect.enum_fields_zipped(b.id)
+
+    if len(a_fields) != len(b_fields) do return false
+    for a_field, i in a_fields {
+        b_field := b_fields[i]
+        if a_field.value != i64(b_field.value) do return false
+        a_name := resolve_to_string(&header.strings, a_field.name)
+        if a_name != b_field.name do return false
+    }
+    return true
+}
+
 deserialize_raw :: proc(header: ^SaveHeader2, src, dst: uintptr, src_type: TypeInfo_Handle, dst_type: ^rt.Type_Info) -> (identical: bool){
     saved_type, found_saved := get_typeinfo_base(header, src_type)
     assert(found_saved)
@@ -165,20 +192,9 @@ deserialize_raw :: proc(header: ^SaveHeader2, src, dst: uintptr, src_type: TypeI
 
             saved_fields := sa.slice(&saved_enum.fields)
             actual_fields := reflect.enum_fields_zipped(dst_type.id)
-            
-            // identical check
-            check: {
-                if len(saved_fields) != len(actual_fields) do break check
-                for saved_field, i in saved_fields {
-                    actual_field := actual_fields[i]
-                    if saved_field.value != i64(actual_field.value) do break check
-                    saved_name := resolve_to_string(&header.strings, saved_field.name)
-                    if saved_name != actual_field.name do break check
-                }
 
-                // if the enum is identical, we can break out and treat it like a normal i64
-                break
-            }
+            // identical check
+            if enum_identical(header, saved_type, dst_type) do break
 
             // otherwise assumed to be a known, non identical enum, do the correct copy operation
             saved_type.identical = false
@@ -196,6 +212,77 @@ deserialize_raw :: proc(header: ^SaveHeader2, src, dst: uintptr, src_type: TypeI
                 dst_value^ = i64(field.value)
             }
             return saved_type.identical
+        case rt.Type_Info_Enumerated_Array:
+            saved_array := (&saved_type.variant.(TypeInfo_Enumerated_Array)) or_break
+
+            saved_index := get_typeinfo_base(header, saved_array.index) or_break
+
+            if enum_identical(header, saved_index, v.index) {
+                saved_index.identical = true
+            }
+
+            saved_elem := get_typeinfo_base(header, saved_array.elem) or_break
+            if saved_index.identical && saved_elem.identical do break
+
+            saved_type.identical = false
+
+            saved_enum := (&saved_index.variant.(TypeInfo_Enum)) or_break
+            count := min(sa.len(saved_enum.fields), v.count)
+
+            for &saved_field in sa.slice(&saved_enum.fields){
+                saved_name := resolve_to_string(&header.strings, saved_field.name)
+                for actual_field in reflect.enum_fields_zipped(v.index.id){
+                    if saved_name != actual_field.name do continue
+                    elem_src := src + uintptr(int(saved_field.value) * saved_elem.size)
+                    elem_dst := dst + uintptr(int(actual_field.value) * v.elem_size)
+                    if !deserialize_raw(header, elem_src, elem_dst, saved_array.elem, v.elem){
+                        saved_type.identical = false
+                    }
+                }
+            }
+            return saved_type.identical
+
+        case rt.Type_Info_Bit_Set:
+            saved_bitset := (&saved_type.variant.(TypeInfo_Bit_Set)) or_break
+            saved_enum_base := get_typeinfo_base(header, saved_bitset.elem) or_break
+
+            if enum_identical(header, saved_enum_base, v.elem) {
+                saved_enum_base.identical = true
+            }
+
+            if saved_enum_base.identical && saved_type.size == dst_type.size do break
+
+            saved_enum := (&saved_enum_base.variant.(TypeInfo_Enum)) or_break
+
+            src_bytes := mem.byte_slice(rawptr(src), saved_type.size)
+            dst_bytes := mem.byte_slice(rawptr(dst), dst_type.size)
+
+            for &saved_field in sa.slice(&saved_enum.fields){
+                byte_index: u64 = u64(saved_field.value / 8)
+                bit_index: u64 = u64(saved_field.value % 8)
+
+                src_byte := src_bytes[byte_index]
+                is_set: bool = ((byte(1) << bit_index) & src_byte) > 0
+
+                saved_name := resolve_to_string(&header.strings, saved_field.name)
+
+                for &actual_field in reflect.enum_fields_zipped(v.elem.id){
+                    if actual_field.name != saved_name do continue
+
+                    byte_index_actual := u64(actual_field.value / 8)
+                    bit_index_actual := u64(actual_field.value % 8)
+
+                    if is_set {
+                        dst_bytes[byte_index_actual] |= 1 << bit_index_actual
+                    }
+                    else {
+                        dst_bytes[byte_index_actual] &= ~(1 << bit_index_actual)
+                    }
+                }
+            }
+            saved_type.identical = false
+
+            return saved_type.identical
         }
     }
 
@@ -206,46 +293,6 @@ deserialize_raw :: proc(header: ^SaveHeader2, src, dst: uintptr, src_type: TypeI
     size := min(saved_type.size, dst_type.size)
     mem.copy(rawptr(dst), rawptr(src), size)
     return saved_type.identical
-}
-
-
-discover_types_raw :: proc(type: typeid , types: ^[dynamic]typeid){
-
-    type_info := type_info_of(type)
-
-    switch {
-    case reflect.is_struct(type_info):
-        for field in reflect.struct_fields_zipped(type){
-            discover_types_raw(field.type.id, types)
-        }
-    case reflect.is_array(type_info):
-        array_info := reflect.type_info_base(type_info).variant.(reflect.Type_Info_Array)
-        discover_types_raw(array_info.elem.id, types)
-        return
-
-    case reflect.is_bit_set(type_info):
-        bit_set_info := reflect.type_info_base(type_info).variant.(reflect.Type_Info_Bit_Set)
-        discover_types_raw(bit_set_info.elem.id, types)
-        return
-
-    case reflect.is_enum(type_info):
-
-    case:
-        return
-    }
-
-    // quit if we've already added it
-    for other in types {
-        if other == type do return
-    }
-
-    append(types, type)
-}
-
-discover_types_2 :: proc(type: typeid, allocator := context.temp_allocator) -> []typeid {
-    types := make([dynamic]typeid, allocator)
-    discover_types_raw(type, &types)
-    return types[:]
 }
 
 // TYPE INFO
@@ -277,6 +324,20 @@ TypeInfo_Array :: struct {
     count: int
 }
 
+TypeInfo_Enumerated_Array :: struct {
+    elem: TypeInfo_Handle,
+    index: TypeInfo_Handle,
+    elem_size: int,
+    count: int,
+}
+
+TypeInfo_Bit_Set :: struct {
+    elem: TypeInfo_Handle,
+    underlying: TypeInfo_Handle,
+    lower: i64,
+    upper: i64,
+}
+
 TypeInfo_Named :: struct {
     name: IndexString,
     type: TypeInfo_Handle
@@ -291,6 +352,8 @@ TypeInfo :: struct {
         TypeInfo_Struct,
         TypeInfo_Enum,
         TypeInfo_Array,
+        TypeInfo_Enumerated_Array,
+        TypeInfo_Bit_Set
     }
 }
 
