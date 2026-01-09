@@ -229,7 +229,15 @@ test_serialization :: proc(){
     Feature :: enum {
         Burnable,
         Eatable,
+        Breakable,
         Cargo,
+    }
+
+    Circle :: struct { radius: f32, centre: [2]f32 }
+    Rectangle :: struct { origin: [2]f32, size: [2]f32 }
+
+    Shape :: union {
+        Circle, Rectangle
     }
 
     TestStruct1 :: struct {
@@ -237,6 +245,7 @@ test_serialization :: proc(){
         data: [2]Blob,
         altitude: [Height]f32,
         features: bit_set[Feature],
+        shape: Shape,
         timer: Timer,
     }
 
@@ -246,6 +255,8 @@ test_serialization :: proc(){
         altitude = {
             .LOW = 1, .MEDIUM = 2.2, .HIGH = 4.20
         },
+        shape = Rectangle { {2, 4} , { 4, 4 }},
+        features = { .Cargo, .Burnable, .Breakable },
         data = {
             Blob { 2 },
             Blob { 3 },
@@ -258,13 +269,14 @@ test_serialization :: proc(){
     NewFeature :: enum {
         Burnable,
         Eatable,
+        Breakable,
         Cargo,
     }
 
     NewHeight :: enum {
         LOW,
-        HIGH,
         MEDIUM,
+        HIGH,
     }
 
     TestStruct2 :: struct {
@@ -273,7 +285,8 @@ test_serialization :: proc(){
         altitude: [NewHeight]f32,
         features: bit_set[NewFeature],
         // health: f32,
-        timer: Timer
+        shape: Shape,
+        timer: Timer,
     }
 
     replicated := TestStruct2 {}
@@ -282,6 +295,6 @@ test_serialization :: proc(){
     log("")
     log("")
 
-    log(test_struct)
-    log(replicated)
+    log(test_struct.shape)
+    log(replicated.shape)
 }

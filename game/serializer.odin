@@ -69,6 +69,15 @@ serialize_2 :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
             save_info.variant = TypeInfo_Bit_Set {
                 elem = save_type(header, v.elem.id),
             }
+        case rt.Type_Info_Union:
+            save_union := TypeInfo_Union {
+                tag_offset = v.tag_offset,
+                tag_type = save_type(header, v.tag_type.id)
+            }
+            for variant in v.variants {
+                sa.append(&save_union.variants, save_type(header, variant.id))
+            }
+            save_info.variant = save_union
         }
         sa.append(&header.types, save_info)
         return TypeInfo_Handle(sa.len(header.types))
@@ -148,6 +157,12 @@ deserialize_raw :: proc(header: ^SaveHeader2, src, dst: uintptr, src_type: TypeI
     assert(found_saved)
 
     dst_type := rt.type_info_base(dst_type)
+
+    defer {
+        if saved_type.identical {
+            saved_type.identical_id = dst_type.id
+        }
+    }
 
     if !saved_type.identical {
 
@@ -283,6 +298,47 @@ deserialize_raw :: proc(header: ^SaveHeader2, src, dst: uintptr, src_type: TypeI
             saved_type.identical = false
 
             return saved_type.identical
+        case rt.Type_Info_Union:
+            saved_union := (&saved_type.variant.(TypeInfo_Union)) or_break
+
+
+            saved_variants := sa.slice(&saved_union.variants)
+            actual_variants := v.variants
+
+            check: {
+                if len(saved_variants) != len(actual_variants) do break check
+
+                for variant_handle, i in saved_variants {
+                    saved_variant, found := get_typeinfo_base(header, variant_handle)
+                    assert(found)
+                    if !saved_variant.identical do break check
+                    if saved_variant.identical_id != actual_variants[i].id do break check
+                }
+                break
+            }
+            saved_type.identical = false
+
+            tag_type, found_tag_type := get_typeinfo_base(header, saved_union.tag_type)
+            assert(found_tag_type)
+
+            assert(tag_type.id == u32)
+            assert(v.tag_type.id == u32)
+
+            src_tag := cast(^u32)(src + saved_union.tag_offset)
+            dst_tag := cast(^u32)(dst + v.tag_offset)
+
+            log(src_tag^)
+
+            if src_tag^ == 0 do break
+
+            dst_tag^ = src_tag^
+
+            src_variant := saved_variants[src_tag^ - 1]
+            dst_variant := actual_variants[src_tag^ - 1]
+
+            deserialize_raw(header, src, dst, src_variant, dst_variant)
+
+            return saved_type.identical
         }
     }
 
@@ -338,6 +394,12 @@ TypeInfo_Bit_Set :: struct {
     upper: i64,
 }
 
+TypeInfo_Union :: struct {
+    variants: sa.Small_Array(100, TypeInfo_Handle),
+    tag_offset: uintptr,
+    tag_type: TypeInfo_Handle,
+}
+
 TypeInfo_Named :: struct {
     name: IndexString,
     type: TypeInfo_Handle
@@ -346,15 +408,19 @@ TypeInfo_Named :: struct {
 TypeInfo :: struct {
     size: int,
     id: typeid,
-    identical: bool,
     variant: union {
         TypeInfo_Named,
         TypeInfo_Struct,
         TypeInfo_Enum,
         TypeInfo_Array,
         TypeInfo_Enumerated_Array,
-        TypeInfo_Bit_Set
-    }
+        TypeInfo_Bit_Set,
+        TypeInfo_Union
+    },
+
+    // deserialization info
+    identical: bool,
+    identical_id: typeid,
 }
 
 SaveHeader2 :: struct {
