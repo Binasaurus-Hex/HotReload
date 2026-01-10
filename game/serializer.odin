@@ -2,6 +2,7 @@ package game
 
 import "core:reflect"
 import "core:mem"
+import "core:strings"
 import "core:slice"
 import "core:fmt"
 import rt "base:runtime"
@@ -205,15 +206,44 @@ deserialize_raw :: proc(header: ^SaveHeader, src, dst: uintptr, src_type: TypeIn
             saved_struct := (&saved_type.variant.(TypeInfo_Struct)) or_break
 
             fields := reflect.struct_fields_zipped(dst_type.id)
+            identical_fields: int
+
             for field in fields {
-                saved_field := find_matching_field(header, saved_struct, field.name) or_continue
+
+                tag_values: []string = {}
+
+                if tag, ok := reflect.struct_tag_lookup(field.tag, "fs"); ok {
+                    tag_values = strings.split(tag, ",", context.temp_allocator)
+
+                    // ignore this field
+                    if slice.contains(tag_values, "-") {
+                        continue
+                    }
+                }
+
+                saved_field, field_found := find_matching_field(header, saved_struct, field.name)
+
+                // check aliases
+                if !field_found {
+                    for alias in tag_values {
+                        saved_field = find_matching_field(header, saved_struct, alias) or_continue
+                        field_found = true
+                    }
+
+                    if !field_found {
+                        continue
+                    }
+                }
+
                 if saved_field.offset != field.offset do saved_type.identical = false
                 field_src := src + saved_field.offset
                 field_dst := dst + field.offset
-                if !deserialize_raw(header, field_src, field_dst, saved_field.type, field.type){
-                    saved_type.identical = false
+                if deserialize_raw(header, field_src, field_dst, saved_field.type, field.type){
+                    identical_fields += 1
                 }
             }
+            if identical_fields != len(fields) do saved_type.identical = false
+
             return saved_type.identical
 
         case rt.Type_Info_Array:
@@ -259,6 +289,7 @@ deserialize_raw :: proc(header: ^SaveHeader, src, dst: uintptr, src_type: TypeIn
                 dst_value^ = i64(field.value)
             }
             return saved_type.identical
+
         case rt.Type_Info_Enumerated_Array:
             saved_array := (&saved_type.variant.(TypeInfo_Enumerated_Array)) or_break
 
@@ -330,6 +361,7 @@ deserialize_raw :: proc(header: ^SaveHeader, src, dst: uintptr, src_type: TypeIn
             saved_type.identical = false
 
             return saved_type.identical
+
         case rt.Type_Info_Union:
             saved_union := (&saved_type.variant.(TypeInfo_Union)) or_break
 

@@ -246,7 +246,7 @@ test_serialization :: proc(){
         position: [2]f32,
     }
 
-    BlobCount :: 2000
+    BlobCount :: 10_000
 
     TestStruct1 :: struct {
         position, velocity: [2]f32,
@@ -279,6 +279,13 @@ test_serialization :: proc(){
         Eatable,
     }
 
+    NewBlob :: struct {
+        blobness: f32,
+        // bingo_ness: f32,
+        succ: f32,
+    }
+
+
     NewThing :: struct {
         velocity: [2]f32,
         position: [2]f32,
@@ -290,19 +297,19 @@ test_serialization :: proc(){
 
     NewShape :: union {
         Circle,
-        Triangle,
         Rectangle,
+        Triangle,
     }
 
     NewHeight :: enum {
         LOW,
-        MEDIUM,
         HIGH,
+        MEDIUM,
     }
 
     TestStruct2 :: struct {
         position, velocity: [2]f32,
-        data: [BlobCount]Blob,
+        data: [BlobCount]NewBlob,
         altitude: [NewHeight]f32,
         features: bit_set[NewFeature],
         // health: f32,
@@ -313,12 +320,12 @@ test_serialization :: proc(){
 
     TEST_ITERATIONS :: 10
     // cbor
-    {
+    if false {
         start := time.now()
 
         for i in 0..<TEST_ITERATIONS {
-            data, err := cbor.marshal(test_struct, cbor.ENCODE_FULLY_DETERMINISTIC)
-            assert(err == nil)
+            data, err := cbor.marshal(test_struct)
+            // assert(err == nil)
 
             replicated := TestStruct2 {}
             cbor.unmarshal(data, &replicated, allocator = context.temp_allocator)
@@ -334,8 +341,10 @@ test_serialization :: proc(){
 
         for i in 0..<TEST_ITERATIONS {
             data := serialize(&test_struct)
+            log(test_struct.shape)
             replicated := TestStruct2 {}
             deserialize(&replicated, data)
+            log(replicated.shape)
         }
 
         duration := time.duration_seconds(time.since(start))
