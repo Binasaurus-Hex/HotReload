@@ -217,7 +217,6 @@ log :: proc(args: ..any, sep := " "){
 
 import "core:encoding/cbor"
 
-
 test_serialization :: proc(){
 
     Blob :: struct {
@@ -247,9 +246,11 @@ test_serialization :: proc(){
         position: [2]f32,
     }
 
+    BlobCount :: 2000
+
     TestStruct1 :: struct {
         position, velocity: [2]f32,
-        data: [500]Blob,
+        data: [BlobCount]Blob,
         altitude: [Height]f32,
         features: bit_set[Feature],
         shape: Shape,
@@ -301,7 +302,7 @@ test_serialization :: proc(){
 
     TestStruct2 :: struct {
         position, velocity: [2]f32,
-        data: [500]Blob,
+        data: [BlobCount]Blob,
         altitude: [NewHeight]f32,
         features: bit_set[NewFeature],
         // health: f32,
@@ -310,21 +311,34 @@ test_serialization :: proc(){
         timer: Timer,
     }
 
-    // buffer
-    if false {
-        log("BUFFER")
-        data := serialize(&test_struct)
-        replicated := TestStruct2 {}
-        deserialize(&replicated, data)
+    TEST_ITERATIONS :: 10
+    // cbor
+    {
+        start := time.now()
 
-        log("from : ")
-        for thing in sa.slice(&test_struct.things) {
-            log("\t",thing)
+        for i in 0..<TEST_ITERATIONS {
+            data, err := cbor.marshal(test_struct, cbor.ENCODE_FULLY_DETERMINISTIC)
+            assert(err == nil)
+
+            replicated := TestStruct2 {}
+            cbor.unmarshal(data, &replicated, allocator = context.temp_allocator)
         }
-        log("")
-        log("to : ")
-        for thing in sa.slice(&replicated.things) {
-            log("\t",thing)
+
+        duration := time.duration_seconds(time.since(start))
+        log("cbor:    ", duration, "s")
+    }
+
+    // buffer
+    {
+        start := time.now()
+
+        for i in 0..<TEST_ITERATIONS {
+            data := serialize(&test_struct)
+            replicated := TestStruct2 {}
+            deserialize(&replicated, data)
         }
+
+        duration := time.duration_seconds(time.since(start))
+        log("buffer: ", duration, "s")
     }
 }

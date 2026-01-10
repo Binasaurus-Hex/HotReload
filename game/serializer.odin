@@ -2,17 +2,28 @@ package game
 
 import "core:reflect"
 import "core:mem"
+import "core:slice"
+import "core:fmt"
 import rt "base:runtime"
 import sa "core:container/small_array"
-import "core:fmt"
+
+MAX_UNION_VARIANTS :: 100
+MAX_STRUCT_FIELDS :: 100
+MAX_ENUM_FIELDS :: 100
 
 serialize :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
 
-    header := new(SaveHeader, context.temp_allocator)
+    SerializationCtx :: struct {
+        types: [dynamic]TypeInfo,
+        strings: [dynamic]byte
+    }
+    ctx := SerializationCtx {}
+    ctx.types.allocator = context.temp_allocator
+    ctx.strings.allocator = context.temp_allocator
 
-    save_type :: proc(header: ^SaveHeader, type: typeid) -> TypeInfo_Handle {
+    save_type :: proc(ctx: ^SerializationCtx, type: typeid) -> TypeInfo_Handle {
 
-        for info, i in sa.slice(&header.types){
+        for info, i in ctx.types {
             if info.id != type do continue
             return TypeInfo_Handle(i + 1)
         }
@@ -25,24 +36,24 @@ serialize :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
         #partial switch v in info.variant {
         case rt.Type_Info_Named:
             save_info.variant = TypeInfo_Named {
-                name = to_index_string(&header.strings, v.name),
-                type = save_type(header, v.base.id)
+                name = to_index_string(&ctx.strings, v.name),
+                type = save_type(ctx, v.base.id)
             }
 
         case rt.Type_Info_Struct:
             save_struct := TypeInfo_Struct {}
             for field in reflect.struct_fields_zipped(type){
                 sa.append(&save_struct.fields, Struct_Field {
-                    name = to_index_string(&header.strings, field.name),
+                    name = to_index_string(&ctx.strings, field.name),
                     offset = field.offset,
-                    type = save_type(header, field.type.id)
+                    type = save_type(ctx, field.type.id)
                 })
             }
             save_info.variant = save_struct
 
         case rt.Type_Info_Array:
             save_info.variant = TypeInfo_Array {
-                elem = save_type(header, v.elem.id),
+                elem = save_type(ctx, v.elem.id),
                 elem_size = v.elem_size,
                 count = v.count
             }
@@ -51,7 +62,7 @@ serialize :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
             save_enum := TypeInfo_Enum {}
             for field in reflect.enum_fields_zipped(type){
                 sa.append(&save_enum.fields, Enum_Field {
-                    name = to_index_string(&header.strings, field.name),
+                    name = to_index_string(&ctx.strings, field.name),
                     value = i64(field.value)
                 })
             }
@@ -59,38 +70,44 @@ serialize :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
 
         case rt.Type_Info_Enumerated_Array:
             save_info.variant = TypeInfo_Enumerated_Array {
-                elem = save_type(header, v.elem.id),
-                index = save_type(header, v.index.id),
+                elem = save_type(ctx, v.elem.id),
+                index = save_type(ctx, v.index.id),
                 elem_size = v.elem_size,
                 count = v.count,
             }
         case rt.Type_Info_Bit_Set:
             save_info.variant = TypeInfo_Bit_Set {
-                elem = save_type(header, v.elem.id),
+                elem = save_type(ctx, v.elem.id),
             }
         case rt.Type_Info_Union:
             save_union := TypeInfo_Union {
                 tag_offset = v.tag_offset,
-                tag_type = save_type(header, v.tag_type.id)
+                tag_type = save_type(ctx, v.tag_type.id)
             }
             for variant in v.variants {
-                sa.append(&save_union.variants, save_type(header, variant.id))
+                sa.append(&save_union.variants, save_type(ctx, variant.id))
             }
             save_info.variant = save_union
         }
-        sa.append(&header.types, save_info)
-        return TypeInfo_Handle(sa.len(header.types))
+        append(&ctx.types, save_info)
+        return TypeInfo_Handle(len(ctx.types))
     }
 
-    save_type(header, T)
+    save_type(&ctx, T)
 
-    for info, i in sa.slice(&header.types){
+    header := SaveHeader {}
+
+    for info, i in ctx.types {
         if info.id != T do continue
         header.stored_type = TypeInfo_Handle(i + 1)
     }
+    header.types = ctx.types[:]
+    header.strings = ctx.strings[:]
 
     bytes := make([dynamic]byte, allocator)
-    append(&bytes, ..mem.ptr_to_bytes(header))
+    append(&bytes, ..mem.ptr_to_bytes(&header))
+    append(&bytes, ..mem.slice_to_bytes(header.types))
+    append(&bytes, ..mem.slice_to_bytes(header.strings))
     append(&bytes, ..mem.ptr_to_bytes(t))
     return bytes[:]
 }
@@ -107,12 +124,24 @@ get_typeinfo_base :: proc(header: ^SaveHeader, handle: TypeInfo_Handle) -> (base
 
 get_typeinfo_ptr :: proc(header: ^SaveHeader, handle: TypeInfo_Handle) -> (ptr: ^TypeInfo, ok: bool) {
     index := int(handle) - 1
-    return sa.get_ptr_safe(&header.types, index)
+    return &header.types[index], true
 }
 
 deserialize :: proc(t: ^$T, data: []byte) {
-    header := cast(^SaveHeader)&data[0]
-    body := data[size_of(SaveHeader):]
+
+    split_ref :: proc(s: ^[]$T, index: int) -> []T {
+        a, b := slice.split_at(s^, index)
+        s^ = b
+        return a
+    }
+
+    data := data
+
+    header := transmute(^SaveHeader)(&split_ref(&data, size_of(SaveHeader))[0])
+    header.types = slice.reinterpret([]TypeInfo, split_ref(&data, len(header.types) * size_of(TypeInfo)))
+    header.strings = split_ref(&data, len(header.strings))
+
+    body := data[:]
 
     start, ok := get_typeinfo_ptr(header, header.stored_type)
     assert(ok)
@@ -122,7 +151,7 @@ deserialize :: proc(t: ^$T, data: []byte) {
 
 find_matching_field :: proc(header: ^SaveHeader, struct_info: ^TypeInfo_Struct, name: string) -> (^Struct_Field, bool) {
     for &field in sa.slice(&struct_info.fields){
-        if resolve_to_string(&header.strings, field.name) != name do continue
+        if resolve_to_string(header.strings, field.name) != name do continue
         return &field, true
     }
     return nil, false
@@ -137,7 +166,7 @@ enum_identical :: proc(header: ^SaveHeader, a: ^TypeInfo, b: ^rt.Type_Info) -> b
     for a_field, i in a_fields {
         b_field := b_fields[i]
         if a_field.value != i64(b_field.value) do return false
-        a_name := resolve_to_string(&header.strings, a_field.name)
+        a_name := resolve_to_string(header.strings, a_field.name)
         if a_name != b_field.name do return false
     }
     return true
@@ -146,7 +175,7 @@ enum_identical :: proc(header: ^SaveHeader, a: ^TypeInfo, b: ^rt.Type_Info) -> b
 get_name :: proc(header: ^SaveHeader, handle: TypeInfo_Handle) -> (s: string, ok: bool) {
     info := get_typeinfo_ptr(header, handle) or_return
     named := (&info.variant.(TypeInfo_Named)) or_return
-    s = resolve_to_string(&header.strings, named.name)
+    s = resolve_to_string(header.strings, named.name)
     return s, true
 }
 
@@ -224,7 +253,7 @@ deserialize_raw :: proc(header: ^SaveHeader, src, dst: uintptr, src_type: TypeIn
                 break
             }
 
-            saved_name: string = resolve_to_string(&header.strings, saved_field.name)
+            saved_name: string = resolve_to_string(header.strings, saved_field.name)
             for field in actual_fields {
                 if field.name != saved_name do continue
                 dst_value^ = i64(field.value)
@@ -248,7 +277,7 @@ deserialize_raw :: proc(header: ^SaveHeader, src, dst: uintptr, src_type: TypeIn
             count := min(sa.len(saved_enum.fields), v.count)
 
             for &saved_field in sa.slice(&saved_enum.fields){
-                saved_name := resolve_to_string(&header.strings, saved_field.name)
+                saved_name := resolve_to_string(header.strings, saved_field.name)
                 for actual_field in reflect.enum_fields_zipped(v.index.id){
                     if saved_name != actual_field.name do continue
                     elem_src := src + uintptr(int(saved_field.value) * saved_elem.size)
@@ -282,7 +311,7 @@ deserialize_raw :: proc(header: ^SaveHeader, src, dst: uintptr, src_type: TypeIn
                 src_byte := src_bytes[byte_index]
                 is_set: bool = ((byte(1) << bit_index) & src_byte) > 0
 
-                saved_name := resolve_to_string(&header.strings, saved_field.name)
+                saved_name := resolve_to_string(header.strings, saved_field.name)
 
                 for &actual_field in reflect.enum_fields_zipped(v.elem.id){
                     if actual_field.name != saved_name do continue
@@ -372,7 +401,7 @@ Struct_Field :: struct {
 }
 
 TypeInfo_Struct :: struct {
-    fields: sa.Small_Array(100, Struct_Field)
+    fields: sa.Small_Array(MAX_STRUCT_FIELDS, Struct_Field)
 }
 
 Enum_Field :: struct {
@@ -381,7 +410,7 @@ Enum_Field :: struct {
 }
 
 TypeInfo_Enum :: struct {
-    fields: sa.Small_Array(100, Enum_Field),
+    fields: sa.Small_Array(MAX_ENUM_FIELDS, Enum_Field),
 }
 
 TypeInfo_Array :: struct {
@@ -405,7 +434,7 @@ TypeInfo_Bit_Set :: struct {
 }
 
 TypeInfo_Union :: struct {
-    variants: sa.Small_Array(100, TypeInfo_Handle),
+    variants: sa.Small_Array(MAX_UNION_VARIANTS, TypeInfo_Handle),
     tag_offset: uintptr,
     tag_type: TypeInfo_Handle,
 }
@@ -434,26 +463,25 @@ TypeInfo :: struct {
 }
 
 SaveHeader :: struct {
-    types: sa.Small_Array(400, TypeInfo),
-    strings: sa.Small_Array(2000, byte),
+    types: []TypeInfo,
+    strings: []byte,
     stored_type: TypeInfo_Handle,
 }
 
 // string stuff
 
-to_index_string :: proc(buffer: ^sa.Small_Array($S, byte), s: string) -> IndexString {
-    index := sa.len(buffer^)
+to_index_string :: proc(buffer: ^[dynamic]byte, s: string) -> IndexString {
+
+    index := len(buffer)
     length := len(s)
-    buffer.len += length
-    copy_slice(buffer.data[index:index + length], transmute([]byte)s)
+    append(buffer, ..transmute([]byte)s)
     return IndexString {
         index, length
     }
 }
 
-resolve_to_string :: proc(buffer: ^sa.Small_Array($T, byte), is: IndexString) -> string {
-    s := sa.slice(buffer)
-    return string(s[is.index: is.index + is.length])
+resolve_to_string :: proc(buffer: []byte, is: IndexString) -> string {
+    return string(buffer[is.index: is.index + is.length])
 }
 
 IndexString :: struct {
