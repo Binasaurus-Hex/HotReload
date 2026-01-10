@@ -5,7 +5,6 @@ import "core:mem"
 import rt "base:runtime"
 import sa "core:container/small_array"
 import "core:fmt"
-import rl "vendor:raylib"
 
 serialize_2 :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
 
@@ -86,9 +85,14 @@ serialize_2 :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
     save_type(header, T)
 
     for info, i in sa.slice(&header.types){
+        // if name, ok := get_name(header, TypeInfo_Handle(i + 1)); ok {
+        //     log(name)
+        // }
         if info.id != T do continue
         header.stored_type = TypeInfo_Handle(i + 1)
     }
+
+    // log("string bytes :", sa.len(header.strings))
 
     bytes := make([dynamic]byte, allocator)
     append(&bytes, ..mem.ptr_to_bytes(header))

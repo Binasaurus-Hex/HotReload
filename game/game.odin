@@ -244,12 +244,17 @@ test_serialization :: proc(){
         Circle, Rectangle
     }
 
+    Thing :: struct {
+        position: [2]f32,
+    }
+
     TestStruct1 :: struct {
         position, velocity: [2]f32,
         data: [500]Blob,
         altitude: [Height]f32,
         features: bit_set[Feature],
         shape: Shape,
+        things: sa.Small_Array(10, Thing),
         timer: Timer,
     }
 
@@ -263,12 +268,20 @@ test_serialization :: proc(){
         features = { .Cargo, .Burnable, .Breakable },
         timer = timer_start(2, true)
     }
+    for i in 0..<10 {
+        sa.append(&test_struct.things, Thing {{f32(i), f32(i + 1)}})
+    }
 
     NewFeature :: enum {
         Burnable,
         Cargo,
         Breakable,
         Eatable,
+    }
+
+    NewThing :: struct {
+        velocity: [2]f32,
+        position: [2]f32,
     }
 
     Triangle :: struct {
@@ -294,20 +307,9 @@ test_serialization :: proc(){
         features: bit_set[NewFeature],
         // health: f32,
         shape: NewShape,
+        things: sa.Small_Array(10, NewThing),
         timer: Timer,
     }
-
-    // cbor
-    {
-        log("CBOR")
-        data, err := cbor.marshal(test_struct, cbor.ENCODE_FULLY_DETERMINISTIC, allocator = context.temp_allocator)
-        replicated := TestStruct2 {}
-        cbor.unmarshal(data, &replicated, allocator = context.temp_allocator)
-        log("from : ", test_struct.features)
-        log("to    : ", replicated.features)
-        log("")
-    }
-
 
     // buffer
     {
@@ -315,7 +317,15 @@ test_serialization :: proc(){
         data := serialize_2(&test_struct)
         replicated := TestStruct2 {}
         deserialize_2(&replicated, data)
-        log("from : ", test_struct.features)
-        log("to      : ", replicated.features)
+
+        log("from : ")
+        for thing in sa.slice(&test_struct.things) {
+            log("\t",thing)
+        }
+        log("")
+        log("to : ")
+        for thing in sa.slice(&replicated.things) {
+            log("\t",thing)
+        }
     }
 }
