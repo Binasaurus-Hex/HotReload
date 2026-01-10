@@ -16,9 +16,7 @@ init_window :: proc() -> rawptr{
 }
 
 @export
-set_window_state :: proc(rawptr){
-
-}
+set_window_state :: proc(rawptr){}
 
 @export
 save :: proc() -> []u8 {
@@ -31,7 +29,7 @@ load :: proc(data: []u8) {
 }
 
 TileType :: enum {
-    None, White
+    None, Yellow, White,
 }
 
 TILEMAP_SIZE :: 100
@@ -185,7 +183,8 @@ editor :: proc(delta: f32){
             start := [2]f32 { f32(row), f32(col) } * GRID_SIZE
             tile_colors := [TileType]rl.Color {
                 .None = rl.BLANK,
-                .White = rl.PURPLE
+                .White = rl.PURPLE,
+                .Yellow = rl.YELLOW
             }
             rl.DrawRectangleV(start, GRID_SIZE, tile_colors[tile])
         }

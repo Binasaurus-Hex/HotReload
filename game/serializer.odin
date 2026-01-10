@@ -85,9 +85,6 @@ serialize :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
     save_type(header, T)
 
     for info, i in sa.slice(&header.types){
-        // if name, ok := get_name(header, TypeInfo_Handle(i + 1)); ok {
-        //     log(name)
-        // }
         if info.id != T do continue
         header.stored_type = TypeInfo_Handle(i + 1)
     }
@@ -117,7 +114,6 @@ deserialize :: proc(t: ^$T, data: []byte) {
     header := cast(^SaveHeader)&data[0]
     body := data[size_of(SaveHeader):]
 
-    fmt.println(header.stored_type)
     start, ok := get_typeinfo_ptr(header, header.stored_type)
     assert(ok)
 
