@@ -216,10 +216,14 @@ log :: proc(args: ..any, sep := " "){
     log_y_offset += FONT_SIZE
 }
 
+import "core:encoding/cbor"
+
+
 test_serialization :: proc(){
 
     Blob :: struct {
-        blobness: f32
+        blobness: f32,
+        succ: f32,
     }
 
     Height :: enum {
@@ -242,7 +246,7 @@ test_serialization :: proc(){
 
     TestStruct1 :: struct {
         position, velocity: [2]f32,
-        data: [2]Blob,
+        data: [500]Blob,
         altitude: [Height]f32,
         features: bit_set[Feature],
         shape: Shape,
@@ -257,20 +261,24 @@ test_serialization :: proc(){
         },
         shape = Rectangle { {2, 4} , { 4, 4 }},
         features = { .Cargo, .Burnable, .Breakable },
-        data = {
-            Blob { 2 },
-            Blob { 3 },
-        },
         timer = timer_start(2, true)
     }
 
-    bytes := serialize_2(&test_struct)
-
     NewFeature :: enum {
         Burnable,
-        Eatable,
-        Breakable,
         Cargo,
+        Breakable,
+        Eatable,
+    }
+
+    Triangle :: struct {
+        points: [3][2]f32
+    }
+
+    NewShape :: union {
+        Circle,
+        Triangle,
+        Rectangle,
     }
 
     NewHeight :: enum {
@@ -281,20 +289,33 @@ test_serialization :: proc(){
 
     TestStruct2 :: struct {
         position, velocity: [2]f32,
-        data: [2]Blob,
+        data: [500]Blob,
         altitude: [NewHeight]f32,
         features: bit_set[NewFeature],
         // health: f32,
-        shape: Shape,
+        shape: NewShape,
         timer: Timer,
     }
 
-    replicated := TestStruct2 {}
-    deserialize_2(&replicated, bytes)
+    // cbor
+    {
+        log("CBOR")
+        data, err := cbor.marshal(test_struct, cbor.ENCODE_FULLY_DETERMINISTIC, allocator = context.temp_allocator)
+        replicated := TestStruct2 {}
+        cbor.unmarshal(data, &replicated, allocator = context.temp_allocator)
+        log("from : ", test_struct.features)
+        log("to    : ", replicated.features)
+        log("")
+    }
 
-    log("")
-    log("")
 
-    log(test_struct.shape)
-    log(replicated.shape)
+    // buffer
+    {
+        log("BUFFER")
+        data := serialize_2(&test_struct)
+        replicated := TestStruct2 {}
+        deserialize_2(&replicated, data)
+        log("from : ", test_struct.features)
+        log("to      : ", replicated.features)
+    }
 }

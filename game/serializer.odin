@@ -86,13 +86,6 @@ serialize_2 :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
     save_type(header, T)
 
     for info, i in sa.slice(&header.types){
-        log(i, ":", info.id)
-    }
-    log("// END //")
-    log("")
-    log("")
-
-    for info, i in sa.slice(&header.types){
         if info.id != T do continue
         header.stored_type = TypeInfo_Handle(i + 1)
     }
@@ -126,7 +119,6 @@ deserialize_2 :: proc(t: ^$T, data: []byte) {
     assert(ok)
 
     identical := deserialize_raw(header, uintptr(&body[0]), uintptr(t), header.stored_type, type_info_of(T))
-    log("is identical ? ", identical)
 }
 
 find_matching_field :: proc(header: ^SaveHeader2, struct_info: ^TypeInfo_Struct, name: string) -> (^Struct_Field, bool) {
@@ -150,6 +142,18 @@ enum_identical :: proc(header: ^SaveHeader2, a: ^TypeInfo, b: ^rt.Type_Info) -> 
         if a_name != b_field.name do return false
     }
     return true
+}
+
+get_name :: proc(header: ^SaveHeader2, handle: TypeInfo_Handle) -> (s: string, ok: bool) {
+    info := get_typeinfo_ptr(header, handle) or_return
+    named := (&info.variant.(TypeInfo_Named)) or_return
+    s = resolve_to_string(&header.strings, named.name)
+    return s, true
+}
+
+get_name_info_ptr :: proc(t: ^rt.Type_Info) -> (s: string, ok: bool) {
+    named := (&t.variant.(rt.Type_Info_Named)) or_return
+    return named.name, true
 }
 
 deserialize_raw :: proc(header: ^SaveHeader2, src, dst: uintptr, src_type: TypeInfo_Handle, dst_type: ^rt.Type_Info) -> (identical: bool){
@@ -327,14 +331,21 @@ deserialize_raw :: proc(header: ^SaveHeader2, src, dst: uintptr, src_type: TypeI
             src_tag := cast(^u32)(src + saved_union.tag_offset)
             dst_tag := cast(^u32)(dst + v.tag_offset)
 
-            log(src_tag^)
-
             if src_tag^ == 0 do break
 
-            dst_tag^ = src_tag^
-
             src_variant := saved_variants[src_tag^ - 1]
-            dst_variant := actual_variants[src_tag^ - 1]
+            src_name, has_src_name := get_name(header, src_variant)
+            assert(has_src_name)
+
+            for variant, i in actual_variants {
+                name, ok := get_name_info_ptr(variant)
+                assert(ok)
+                if name != src_name do continue
+                dst_tag^ = u32(i + 1)
+                break
+            }
+
+            dst_variant := actual_variants[dst_tag^ - 1]
 
             deserialize_raw(header, src, dst, src_variant, dst_variant)
 
@@ -345,7 +356,7 @@ deserialize_raw :: proc(header: ^SaveHeader2, src, dst: uintptr, src_type: TypeI
     if saved_type.size != dst_type.size do saved_type.identical = false
 
     // fallback option
-    log("|| falling through for", dst_type.id, " ||")
+
     size := min(saved_type.size, dst_type.size)
     mem.copy(rawptr(dst), rawptr(src), size)
     return saved_type.identical
@@ -428,7 +439,6 @@ SaveHeader2 :: struct {
     strings: sa.Small_Array(2000, byte),
     stored_type: TypeInfo_Handle,
 }
-
 
 // string stuff
 
