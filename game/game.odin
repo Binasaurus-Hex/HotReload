@@ -22,7 +22,7 @@ set_window_state :: proc(rawptr){
 
 @export
 save :: proc() -> []u8 {
-    return serialize(&state)
+    return serialize(&state, context.allocator)
 }
 
 @export
@@ -312,11 +312,11 @@ test_serialization :: proc(){
     }
 
     // buffer
-    {
+    if false {
         log("BUFFER")
-        data := serialize_2(&test_struct)
+        data := serialize(&test_struct)
         replicated := TestStruct2 {}
-        deserialize_2(&replicated, data)
+        deserialize(&replicated, data)
 
         log("from : ")
         for thing in sa.slice(&test_struct.things) {

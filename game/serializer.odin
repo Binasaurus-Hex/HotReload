@@ -6,11 +6,11 @@ import rt "base:runtime"
 import sa "core:container/small_array"
 import "core:fmt"
 
-serialize_2 :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
+serialize :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
 
-    header := new(SaveHeader2, context.temp_allocator)
+    header := new(SaveHeader, context.temp_allocator)
 
-    save_type :: proc(header: ^SaveHeader2, type: typeid) -> TypeInfo_Handle {
+    save_type :: proc(header: ^SaveHeader, type: typeid) -> TypeInfo_Handle {
 
         for info, i in sa.slice(&header.types){
             if info.id != type do continue
@@ -92,15 +92,13 @@ serialize_2 :: proc(t: ^$T, allocator := context.temp_allocator) -> []byte {
         header.stored_type = TypeInfo_Handle(i + 1)
     }
 
-    // log("string bytes :", sa.len(header.strings))
-
     bytes := make([dynamic]byte, allocator)
     append(&bytes, ..mem.ptr_to_bytes(header))
     append(&bytes, ..mem.ptr_to_bytes(t))
     return bytes[:]
 }
 
-get_typeinfo_base :: proc(header: ^SaveHeader2, handle: TypeInfo_Handle) -> (base: ^TypeInfo, ok: bool){
+get_typeinfo_base :: proc(header: ^SaveHeader, handle: TypeInfo_Handle) -> (base: ^TypeInfo, ok: bool){
     handle := handle
     for {
         base = get_typeinfo_ptr(header, handle) or_return
@@ -110,22 +108,23 @@ get_typeinfo_base :: proc(header: ^SaveHeader2, handle: TypeInfo_Handle) -> (bas
     return base, true
 }
 
-get_typeinfo_ptr :: proc(header: ^SaveHeader2, handle: TypeInfo_Handle) -> (ptr: ^TypeInfo, ok: bool) {
+get_typeinfo_ptr :: proc(header: ^SaveHeader, handle: TypeInfo_Handle) -> (ptr: ^TypeInfo, ok: bool) {
     index := int(handle) - 1
     return sa.get_ptr_safe(&header.types, index)
 }
 
-deserialize_2 :: proc(t: ^$T, data: []byte) {
-    header := cast(^SaveHeader2)&data[0]
-    body := data[size_of(SaveHeader2):]
+deserialize :: proc(t: ^$T, data: []byte) {
+    header := cast(^SaveHeader)&data[0]
+    body := data[size_of(SaveHeader):]
 
+    fmt.println(header.stored_type)
     start, ok := get_typeinfo_ptr(header, header.stored_type)
     assert(ok)
 
     identical := deserialize_raw(header, uintptr(&body[0]), uintptr(t), header.stored_type, type_info_of(T))
 }
 
-find_matching_field :: proc(header: ^SaveHeader2, struct_info: ^TypeInfo_Struct, name: string) -> (^Struct_Field, bool) {
+find_matching_field :: proc(header: ^SaveHeader, struct_info: ^TypeInfo_Struct, name: string) -> (^Struct_Field, bool) {
     for &field in sa.slice(&struct_info.fields){
         if resolve_to_string(&header.strings, field.name) != name do continue
         return &field, true
@@ -133,7 +132,7 @@ find_matching_field :: proc(header: ^SaveHeader2, struct_info: ^TypeInfo_Struct,
     return nil, false
 }
 
-enum_identical :: proc(header: ^SaveHeader2, a: ^TypeInfo, b: ^rt.Type_Info) -> bool {
+enum_identical :: proc(header: ^SaveHeader, a: ^TypeInfo, b: ^rt.Type_Info) -> bool {
     a := (&a.variant.(TypeInfo_Enum)) or_return
     a_fields := sa.slice(&a.fields)
     b_fields := reflect.enum_fields_zipped(b.id)
@@ -148,7 +147,7 @@ enum_identical :: proc(header: ^SaveHeader2, a: ^TypeInfo, b: ^rt.Type_Info) -> 
     return true
 }
 
-get_name :: proc(header: ^SaveHeader2, handle: TypeInfo_Handle) -> (s: string, ok: bool) {
+get_name :: proc(header: ^SaveHeader, handle: TypeInfo_Handle) -> (s: string, ok: bool) {
     info := get_typeinfo_ptr(header, handle) or_return
     named := (&info.variant.(TypeInfo_Named)) or_return
     s = resolve_to_string(&header.strings, named.name)
@@ -160,7 +159,7 @@ get_name_info_ptr :: proc(t: ^rt.Type_Info) -> (s: string, ok: bool) {
     return named.name, true
 }
 
-deserialize_raw :: proc(header: ^SaveHeader2, src, dst: uintptr, src_type: TypeInfo_Handle, dst_type: ^rt.Type_Info) -> (identical: bool){
+deserialize_raw :: proc(header: ^SaveHeader, src, dst: uintptr, src_type: TypeInfo_Handle, dst_type: ^rt.Type_Info) -> (identical: bool){
     saved_type, found_saved := get_typeinfo_base(header, src_type)
     assert(found_saved)
 
@@ -438,7 +437,7 @@ TypeInfo :: struct {
     identical_id: typeid,
 }
 
-SaveHeader2 :: struct {
+SaveHeader :: struct {
     types: sa.Small_Array(400, TypeInfo),
     strings: sa.Small_Array(2000, byte),
     stored_type: TypeInfo_Handle,
