@@ -281,7 +281,7 @@ test_serialization :: proc(){
 
     NewBlob :: struct {
         blobness: f32,
-        // bingo_ness: f32,
+        bingo_ness: f32,
         succ: f32,
     }
 
@@ -320,7 +320,7 @@ test_serialization :: proc(){
 
     TEST_ITERATIONS :: 10
     // cbor
-    if false {
+    if true {
         start := time.now()
 
         for i in 0..<TEST_ITERATIONS {
@@ -341,10 +341,10 @@ test_serialization :: proc(){
 
         for i in 0..<TEST_ITERATIONS {
             data := serialize(&test_struct)
-            log(test_struct.shape)
+            // log(test_struct.shape)
             replicated := TestStruct2 {}
             deserialize(&replicated, data)
-            log(replicated.shape)
+            // log(replicated.shape)
         }
 
         duration := time.duration_seconds(time.since(start))
