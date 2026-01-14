@@ -6,7 +6,7 @@ import "core:c"
 import "core:fmt"
 
 UniformValue :: union {
-    f32, i32, [2]f32, [][2]f32, rl.Texture, [4]f32, [3]f32, [][4]f32
+    f32, i32, [2]f32, [2]i32, [][2]f32, []i32, rl.Texture, [4]f32, [3]f32, [][4]f32
 }
 
 ShaderInterface :: struct {
@@ -84,11 +84,19 @@ interface_set_uniforms :: proc(interface: ^ShaderInterface){
                 rl.SetShaderValue(interface.shader, location, &v, .FLOAT)
             case [2]f32:
                 rl.SetShaderValue(interface.shader, location, &v, .VEC2)
+            case [2]i32:
+                rl.SetShaderValue(interface.shader, location, &v, .IVEC2)
             case [3]f32:
                 rl.SetShaderValue(interface.shader, location, &v, .VEC3)
             case [4]f32:
                 rl.SetShaderValue(interface.shader, location, &v, .VEC4)
 
+            case []i32:
+                count := i32(len(v))
+                count_key := fmt.ctprintf("%s_count", key)
+                count_loc := rl.GetShaderLocation(interface.shader, count_key)
+                rl.SetShaderValueV(interface.shader, location, &v[0], .INT, count)
+                rl.SetShaderValue(interface.shader, count_loc, &count, .INT)
             case [][2]f32:
                 count := i32(len(v))
                 count_key := fmt.ctprintf("%s_count", key)

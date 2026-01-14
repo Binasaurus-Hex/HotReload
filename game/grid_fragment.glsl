@@ -1,4 +1,4 @@
-#version 330
+#version 430
 
 in vec2 fragTexCoord;
 in vec3 fragPosition;
@@ -18,7 +18,7 @@ void grid_line(vec2 coord, float block, float thickness, float zoom){
 }
 
 void main(){
-    float thickness = 1;
+    float thickness = 1.2;
     thickness /= zoom;
 
     finalColor = vec4(.1);

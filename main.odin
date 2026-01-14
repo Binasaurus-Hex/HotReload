@@ -28,21 +28,23 @@ get_api_path :: proc(version: int) -> string {
     return fmt.tprintf("game_{}.dll", version)
 }
 
-build_api :: proc(version: int) -> (path: string, error_string: string, success: bool) {
+build_api :: proc(version: int) -> (output_path: string, error_string: string, success: bool) {
 
     start := time.now()
     defer {
         fmt.printfln("build took : {}s", time.duration_seconds(time.since(start)))
     }
 
-    path = get_api_path(version)
-    output := fmt.tprint("-out=", path)
+    output_path = get_api_path(version)
+    output := fmt.tprint("-out=", output_path)
 
     game_folder := "game" if BACKEND == .Raylib else "game_karl2d"
 
+    odin_path := path.join({ODIN_ROOT, "odin"}, context.temp_allocator)
+
     process_description := os2.Process_Desc {
         command = {
-            "odin",
+            odin_path,
             "build",
             game_folder,
             "-o=none",
@@ -60,7 +62,7 @@ build_api :: proc(version: int) -> (path: string, error_string: string, success:
 
     fmt.println(error_string)
 
-    return path, error_string, state.exit_code == 0
+    return output_path, error_string, state.exit_code == 0
 }
 
 main :: proc(){
@@ -74,7 +76,7 @@ main :: proc(){
     api: GameAPI
 
     if BACKEND == .Raylib {
-        raylib_dll := path.join({ODIN_ROOT, "vendor", "raylib", "windows", "raylib.dll"})
+        raylib_dll := path.join({ODIN_ROOT, "vendor", "raylib", "windows", "raylib.dll"}, context.temp_allocator)
         copy_err := os2.copy_file("raylib.dll", raylib_dll)
         assert(copy_err == nil)
     }
@@ -119,9 +121,21 @@ main :: proc(){
             fmt.printfln("Failed unloading lib: {0}", dynlib.last_error())
         }
 
-        dll := fmt.tprintf("game_{}.dll", i)
-        err: os2.Error
-        err = os2.remove(dll)
-        assert(err == nil, fmt.tprint(err, "| ", dll))
+        {
+            dll := fmt.tprintf("game_{}.dll", i)
+            err: os2.Error
+            err = os2.remove(dll)
+        }
+
+        {
+            pdb := fmt.tprintf("game_{}.pdb", i)
+            err: os2.Error
+            err = os2.remove(pdb)
+        }
+        {
+            rdi := fmt.tprintf("game_{}.rdi", i)
+            err: os2.Error
+            err = os2.remove(rdi)
+        }
     }
 }

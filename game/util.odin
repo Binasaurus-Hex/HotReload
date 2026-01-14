@@ -1,5 +1,6 @@
 package game
 import "core:fmt"
+import rl "vendor:raylib"
 
 StaticString :: struct(buffer_size: int){
     buffer: [buffer_size]u8,
@@ -54,4 +55,11 @@ timer_update :: proc(timer: ^Timer, delta: f32) -> (complete: bool){
         }
     }
     return
+}
+
+// rendering
+
+draw_textured_rect :: proc(texture: rl.Texture, rect: rl.Rectangle){
+    source := rl.Rectangle {0, 0, f32(texture.width), f32(texture.height)}
+    rl.DrawTexturePro(texture, source, rect, {}, 0, rl.WHITE)
 }
