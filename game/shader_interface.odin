@@ -1,7 +1,9 @@
 package game
 
 import rl "vendor:raylib"
+import "core:time"
 import "core:strings"
+// import os "core:os/os2"
 import "core:c"
 import "core:fmt"
 
@@ -37,6 +39,14 @@ load_shader :: proc(vertex: cstring, fragment: cstring) -> ShaderInterface {
     }
 
     return interface
+}
+
+unload_shader :: proc(shader: ^ShaderInterface){
+    rl.UnloadShader(shader.shader)
+    delete(shader.uniforms)
+    delete(shader.uniform_locs)
+    delete(shader.vertex)
+    delete(shader.fragment)
 }
 
 temp_shader :: proc(from: ShaderInterface) -> ^ShaderInterface {

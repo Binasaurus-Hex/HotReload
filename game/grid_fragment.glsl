@@ -18,7 +18,8 @@ void grid_line(vec2 coord, float block, float thickness, float zoom){
 }
 
 void main(){
-    float thickness = 1.2;
+    // float thickness = 1.2;
+    float thickness = 2;
     thickness /= zoom;
 
     finalColor = vec4(.1);
@@ -33,17 +34,19 @@ void main(){
 
     // axis
     {
-        bool x_axis = centred_position.x < (thickness) && centred_position.x > 0;
-        bool y_axis = centred_position.y < (thickness) && centred_position.y > 0;
+        vec4 red = vec4(1, 0, 0, 8 * zoom);
+        vec4 green = vec4(0, 1, 0, 8 * zoom);
+        
+        red.xyz += vec3(.4);
+        green.xyz += vec3(.4);
+
+        bool x_axis = centred_position.y < (thickness) && centred_position.y > 0;
+        bool y_axis = centred_position.x < (thickness) && centred_position.x > 0;
         if(x_axis){
-            finalColor = vec4(1, 0, 0, 8 * zoom);
+            finalColor = red;
         }
         if(y_axis){
-            finalColor = vec4(0, 1, 0, 8 * zoom);
-        }
-        if(x_axis && y_axis){
-            finalColor = vec4(0, 1, 0, 8 * zoom) + vec4(1, 0, 0, 8 * zoom);
-            // finalColor = vec4(1);
+            finalColor = green;
         }
     }
 }

@@ -308,14 +308,20 @@ deserialize_raw :: proc(header: ^SaveHeader, src, dst: uintptr, src_type: TypeIn
         case rt.Type_Info_Array:
             saved_array := (&saved_type.variant.(TypeInfo_Array)) or_break
             count := min(saved_array.count, v.count)
+            elem_identical: bool
             for i in 0..<count {
                 elem_src := src + uintptr(i * saved_array.elem_size)
                 elem_dst := dst + uintptr(i * v.elem_size)
 
-                if !deserialize_raw(header, elem_src, elem_dst, saved_array.elem, v.elem) {
+                elem_identical = deserialize_raw(header, elem_src, elem_dst, saved_array.elem, v.elem)
+                if elem_identical {
+                    break
+                }
+                else {
                     saved_type.identical = false
                 }
             }
+            if elem_identical do break
             return saved_type.identical
 
         case rt.Type_Info_Enum:

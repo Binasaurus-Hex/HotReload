@@ -2,7 +2,6 @@
 
 in vec2 fragTexCoord;
 in vec4 fragColor;
-in vec3 fragPosition;
 
 // input for the actual number of tiles
 // assumes a square grid with side length of 'tilemap_size'
@@ -13,9 +12,11 @@ layout(std430, binding=0) buffer ssbo0 {
 // tile texture, x = cel_size, y = cel_size * 6
 uniform sampler2D texture0;
 
+#define TILE_TYPES 6
+
 // 6 tiles, 4 ints per tile defition
 // all other tiles are rotations of these basic tiles
-uniform int tile_definitions[24];
+uniform int tile_definitions[TILE_TYPES * 4];
 
 uniform int brush_radius;
 uniform int tilemap_size;
@@ -23,7 +24,7 @@ uniform int cel_size;
 
 // should always be 6
 uniform int tileset_count;
-uniform ivec2 mouse_coord;
+uniform ivec2 brush_coordinate;
 
 out vec4 finalColor;
 
@@ -43,20 +44,19 @@ vec4 draw_tile(vec2 uv, int tile){
     return texture(texture0, uv);
 }
 
-bool coord_is_mouse(ivec2 coordinate){
-    return distance(vec2(coordinate), vec2(mouse_coord)) <= brush_radius;
+bool is_brush(ivec2 coordinate){
+    return distance(vec2(coordinate), vec2(brush_coordinate)) <= brush_radius;
 }
 
 int get_tile(ivec2 coordinate){
-    if(coord_is_mouse(coordinate)) return 1;
+    if(is_brush(coordinate)) return 1;
     int index = coordinate.x * tilemap_size + coordinate.y;
     if(index < 0 || index > (tilemap_size * tilemap_size)) return 0;
     return tiles[index];
 }
 
 vec4 draw_half_grid(){
-    vec2 position = fragPosition.xy;
-    ivec2 coordinate = ivec2(round(position / vec2(cel_size)));
+    ivec2 coordinate = ivec2(fragTexCoord * tilemap_size + .5);
     coordinate -= ivec2(1);
 
     int neighbors_src[4];
@@ -68,7 +68,7 @@ vec4 draw_half_grid(){
     int texture_index = 0;
     int rotations = 0;
     {
-        for(int i = 0; i < tileset_count; i++){
+        for(int i = 0; i < TILE_TYPES; i++){
 
             bool outer_equal = false;
             int neighbors[4] = neighbors_src;
@@ -101,21 +101,35 @@ vec4 draw_half_grid(){
         }
     }
 
-    vec2 cel_uv = fract((fragTexCoord * tilemap_size) + .5);
+    int variations = (tileset_count - 1) / (TILE_TYPES - 1);
+    bool rand = variations > 1 && texture_index > 0 && (2 * coordinate.x + coordinate.y) % 3 == 0;
+    if(rand && rotations == 0){
+        texture_index += 5;
+    }
+    else if (rand && rotations == 2){
+        texture_index += 10;
+    }
+
+    vec2 cel_uv = fragTexCoord;
+    cel_uv = fract(cel_uv * tilemap_size + .5);
+
+
     cel_uv = rotate_uv_90(cel_uv, rotations);
+    // return vec4(cel_uv.x, cel_uv.y, 0, 1);
+    cel_uv = clamp(cel_uv, 0.0001, .9999999);
     return draw_tile(cel_uv, texture_index);
 }
 
 // #define HALF_GRID
 
 void main(){
+
     finalColor = draw_half_grid();
 
-    // do mouse highlight
+    // do brush highlight
     {
-        vec2 position = fragPosition.xy;
-        ivec2 coordinate = ivec2(position / vec2(cel_size));
-        if(coord_is_mouse(coordinate)){
+        ivec2 coordinate = ivec2(fragTexCoord * tilemap_size);
+        if(is_brush(coordinate)){
             finalColor += vec4(.2);
         }
 
