@@ -1,0 +1,19 @@
+// raddbg 0.9.23 project file
+
+recent_file: path: "../CppPractice/main.cpp"
+recent_file: path: "game/game.odin"
+recent_file: path: "main.odin"
+recent_file: path: "game/odin-aseprite/read_chunk.odin"
+recent_file: path: "game/odin-aseprite/unmarshal.odin"
+recent_file: path: "../Odin/base/runtime/core.odin"
+recent_file: path: "../Odin/base/runtime/core_builtin.odin"
+breakpoint:
+{
+  source_location: "../CppPractice/main.cpp:17:1"
+  hit_count: 0
+}
+breakpoint:
+{
+  source_location: "../CppPractice/main.cpp:51:1"
+  hit_count: 0
+}

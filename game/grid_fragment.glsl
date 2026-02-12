@@ -36,7 +36,7 @@ void main(){
     {
         vec4 red = vec4(1, 0, 0, 8 * zoom);
         vec4 green = vec4(0, 1, 0, 8 * zoom);
-        
+
         red.xyz += vec3(.4);
         green.xyz += vec3(.4);
 

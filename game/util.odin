@@ -1,5 +1,8 @@
 package game
 import "core:fmt"
+import "core:path/filepath"
+import "core:path/slashpath"
+import os "core:os/os2"
 import rl "vendor:raylib"
 
 StaticString :: struct(buffer_size: int){
@@ -22,11 +25,9 @@ append_to_static :: proc(static_string: ^StaticString($T), value: string){
     static_string.length += len(value)
 }
 
-
 equal_to_static :: proc(static_string: ^StaticString($T), value: string) -> bool {
     return static_to_string(static_string) == value
 }
-
 
 // timer
 
@@ -62,4 +63,13 @@ timer_update :: proc(timer: ^Timer, delta: f32) -> (complete: bool){
 draw_textured_rect :: proc(texture: rl.Texture, rect: rl.Rectangle){
     source := rl.Rectangle {0, 0, f32(texture.width), f32(texture.height)}
     rl.DrawTexturePro(texture, source, rect, {}, 0, rl.WHITE)
+}
+
+
+file_wait :: proc(fullpath: string){
+    dir, name := filepath.split(fullpath)
+    new := slashpath.join({dir, "______"}, context.temp_allocator)
+    for os.rename(fullpath, new) != nil {
+    }
+    os.rename(new, fullpath)
 }

@@ -20,12 +20,6 @@ GameAPI :: struct {
     _game_api_handle: dynlib.Library
 }
 
-Backend :: enum {
-    Raylib, Karl2D
-}
-
-BACKEND :: Backend.Raylib
-
 get_api_path :: proc(version: int) -> string {
     return fmt.tprintf("game_{}.dll", version)
 }
@@ -40,7 +34,7 @@ build_api :: proc(version: int) -> (output_path: string, error_string: string, s
     output_path = get_api_path(version)
     output := fmt.tprint("-out=", output_path)
 
-    game_folder := "game" if BACKEND == .Raylib else "game_karl2d"
+    game_folder := "game"
 
     odin_path := path.join({ODIN_ROOT, "odin"}, context.temp_allocator)
 
@@ -53,7 +47,7 @@ build_api :: proc(version: int) -> (output_path: string, error_string: string, s
             "-debug" if ODIN_DEBUG else "",
             "-linker=radlink",
             "-build-mode=dll",
-            "-define:RAYLIB_SHARED=true" if BACKEND == .Raylib else "",
+            "-define:RAYLIB_SHARED=true",
             "-extra-linker-flags=/NOEXP /NOIMPLIB",
             output
             }

@@ -17,6 +17,34 @@ import "vendor:raylib/rlgl"
 import sa "core:container/small_array"
 import ase "odin-aseprite"
 import "odin-aseprite/utils"
+import "core:path/filepath"
+import "core:path/slashpath"
+
+RELEASE :: #config(RELEASE, false)
+
+TextureType :: enum {
+
+    Player,
+
+    // crates
+    Crate_Astantine,
+    Crate_Inverse_Matter,
+    Crate_Nanobots,
+    Crate_Scrap,
+    Crate_Hydrogen,
+    Crate_Beef,
+    Crate_Medical_Supplies,
+    Crate_Argon,
+    Crate_Titanium
+}
+
+when RELEASE {
+    main :: proc(){
+        rl.InitWindow(800, 600, "game")
+        rl.SetWindowState({.WINDOW_RESIZABLE})
+        run(false, "", {}, context.allocator, context.allocator)
+    }
+}
 
 @export
 init_window :: proc() -> rawptr{
@@ -35,21 +63,71 @@ ShaderType :: enum {
 
 FONT_SIZE :: 28
 
+TagType :: enum {
+    Intro,
+    Helmet_On,
+    TractorBeamSwitchIn,
+    PistolShoot,
+    PistolReload
+}
+tag_names :: [TagType]string {
+    .Intro =                "intro",
+    .Helmet_On =            "helmet_on",
+    .TractorBeamSwitchIn =  "tractor_beam_switch_in",
+    .PistolShoot =          "pistol_shoot",
+    .PistolReload =         "pistol_reload"
+}
+
+Tag :: struct {
+    from, to: int,
+    type: TagType
+}
+
 GameState :: struct {
     camera: rl.Camera2D,
     initialized: bool,
 
     tilemap: Tilemap,
-    tilesets: sa.Small_Array(10, Tileset),
+    tilesets: [TilesetType]Tileset,
 
     tileset_index: int,
     brush_size: int,
 
     shaders: [ShaderType]ShaderInterface `fs:"-"`,
     default_font: rl.Font,
+
+    textures: [TextureType]rl.Texture,
+    tags: [TextureType][TagType]Tag,
+    frames: [TextureType]int
 }
 state: ^GameState
 
+texture_load_paths :: [TextureType][2]string {
+    .Crate_Argon =                  { "crate.aseprite", "argon" },
+    .Crate_Astantine =              { "crate.aseprite", "astantine" },
+    .Crate_Titanium =               { "crate.aseprite", "titanium" },
+    .Crate_Hydrogen =               { "crate.aseprite", "hydrogen" },
+    .Crate_Beef =                   { "crate.aseprite", "beef" },
+    .Crate_Inverse_Matter =         { "crate.aseprite", "InverseMatter" },
+    .Crate_Nanobots =               { "crate.aseprite", "nanobots" },
+    .Crate_Scrap =                  { "crate.aseprite", "scrap" },
+    .Crate_Medical_Supplies =       { "crate.aseprite", "medical_supplies" },
+    .Player =                       { "player.aseprite", "-" }
+}
+
+TilesetType :: enum {
+    Debug,
+    Grass,
+    Clay,
+    Block
+}
+
+tileset_load_paths :: [TilesetType][2]string {
+    .Debug = { "test.aseprite", "debug" },
+    .Grass = { "test.aseprite", "grass" },
+    .Clay =  { "test.aseprite", "clay" },
+    .Block = { "test.aseprite", "block" }
+}
 
 get_default_state :: proc() {
 
@@ -61,7 +139,7 @@ get_default_state :: proc() {
     }
 
     // tilemap
-    {
+    if true {
         state.tilemap.cel_size = 16
 
         // set tiles to image
@@ -87,36 +165,127 @@ get_default_state :: proc() {
         }
     }
 
-    load_tilesets()
+    load_aseprite("game/test.aseprite")
+    load_aseprite("game/player.aseprite")
+    load_aseprite("game/crate.aseprite")
 
     state.initialized = true
 }
 
-load_tilesets :: proc(){
+load_aseprite :: proc(filename: string){
 
-    sa.clear(&state.tilesets)
+    _, name := filepath.split(filename)
 
     doc: ase.Document
     defer ase.destroy_doc(&doc)
 
-    umerr := ase.unmarshal_from_filename(&doc, "game/test.aseprite", context.temp_allocator)
-    assert(umerr == nil, fmt.tprint(umerr))
+    context.allocator = context.temp_allocator
 
-    ts, tileset_err := utils.tileset_from_doc(&doc, context.temp_allocator)
-    assert(tileset_err == nil)
+    data, read_err := os.read_entire_file_from_path(filename, context.allocator)
+    assert(read_err == nil, fmt.tprint(read_err))
 
-    for tileset in ts {
-        image := rl.Image {
-            data = &tileset.tiles[0],
-            width = i32(tileset.width),
-            height = i32(tileset.height * tileset.num),
-            mipmaps = 1,
-            format = .UNCOMPRESSED_R8G8B8A8
+    unmarshal_err := ase.unmarshal_from_slice(&doc, data)
+    assert(unmarshal_err == nil, fmt.tprint(unmarshal_err))
+
+    info: utils.Info
+    info_err := utils.get_info(&doc, &info)
+    assert(info_err == nil)
+
+    get_texture_type :: proc(filename, layer_name: string) -> (type: TextureType, found: bool) {
+        for path, t in texture_load_paths {
+            if path.x != filename do continue
+            if path.y != layer_name do continue
+            return t, true
         }
-        sa.append(&state.tilesets, Tileset {
-            texture = rl.LoadTextureFromImage(image),
-            count = tileset.num
-        })
+        return
+    }
+
+    if len(info.frames) <= 1 {
+        cels := info.frames[0].cels
+
+        for cel in cels {
+            layer_name := info.layers[cel.layer].name
+
+            texture_type := get_texture_type(name, layer_name) or_continue
+
+            if len(cel.raw) == 0 do continue
+            image := rl.Image {
+                data = &cel.raw[0],
+                width = i32(cel.width),
+                height = i32(cel.height),
+                format = .UNCOMPRESSED_R8G8B8A8,
+                mipmaps = 1
+            }
+            texture := rl.LoadTextureFromImage(image)
+
+            state.textures[texture_type] = texture
+        }
+    }
+    else if texture_type, found := get_texture_type(name, "-"); found {
+
+        sprite_info := utils.Sprite_Info {
+            size = { info.md.width, info.md.height },
+            count = len(info.frames)
+        }
+        sheet, sheet_err := utils.create_sprite_sheet_from_info(info, sprite_info)
+
+        sheet_image := rl.Image {
+            data = &sheet.data[0],
+            width = i32(sheet.width),
+            height = i32(sheet.height),
+            format = .UNCOMPRESSED_R8G8B8A8,
+            mipmaps = 1
+        }
+
+        sheet_texture := rl.LoadTextureFromImage(sheet_image)
+
+        state.textures[texture_type] = sheet_texture
+        for &tag in info.tags {
+
+            get_tag :: proc(name: string) -> (type: TagType, ok: bool) {
+                for tag_name, tag_type in tag_names {
+                    if tag_name != name do continue
+                    return tag_type, true
+                }
+                return {}, false
+            }
+            tag_type: TagType = get_tag(tag.name) or_continue
+            state.tags[texture_type][tag_type] = Tag {
+                from = tag.from,
+                to = tag.to,
+                type = tag_type
+            }
+        }
+        state.frames[texture_type] = len(info.frames)
+    }
+
+    if len(info.tilesets) > 0 {
+        for tileset in info.tilesets {
+
+            get_type :: proc(file_name, tileset_name: string) -> (type: TilesetType, found: bool) {
+                for path, t in tileset_load_paths {
+                    if path.x != file_name do continue
+                    if path.y != tileset_name do continue
+                    return t, true
+                }
+                return
+            }
+
+            tileset_type := get_type(name, tileset.name) or_continue
+
+            image := rl.Image {
+                data = &tileset.tiles[0],
+                width = i32(tileset.width),
+                height = i32(tileset.height * tileset.num),
+                mipmaps = 1,
+                format = .UNCOMPRESSED_R8G8B8A8
+            }
+            texture := rl.LoadTextureFromImage(image)
+            state.tilesets[tileset_type] = Tileset {
+                texture = texture,
+                count = tileset.num
+            }
+        }
     }
 }
 
@@ -178,7 +347,6 @@ run :: proc(error: bool, error_string: string, previous_state: []byte, game_allo
 
         // reloading files
         {
-            // files, err := os.read_all_directory_by_path(#directory, context.temp_allocator)
             files := read_all_directory_cached(#directory, context.temp_allocator)
 
             if file, updated := check_reload(files, &start_time); updated {
@@ -186,7 +354,8 @@ run :: proc(error: bool, error_string: string, previous_state: []byte, game_allo
                     return serialize(state, state_allocator), true
                 }
                 if strings.has_suffix(file.name, ".aseprite") {
-                    load_tilesets()
+                    file_wait(file.fullpath)
+                    load_aseprite(file.fullpath)
                 }
                 if strings.has_suffix(file.name, ".glsl"){
                     for &shader in state.shaders {
@@ -203,15 +372,36 @@ run :: proc(error: bool, error_string: string, previous_state: []byte, game_allo
         }
 
 
+
         rl.BeginMode2D(state.camera)
 
-        // editor(delta)
+        editor(delta)
 
         rl.EndMode2D()
 
+        for texture, type in state.textures {
+            scale :f32 = 3
+            frames: int = state.frames[type]
+            if frames > 0 {
+                current_animation := TagType.Intro
+                @static animation_frame: int
+                @static timer: Timer
+                if !timer.running do timer = timer_start(.1, true)
 
-        load_gif(#load("Trailer3_720.gif"))
-
+                tag := state.tags[type][current_animation]
+                range := tag.to - tag.from
+                if range > 0 {
+                    if timer_update(&timer, delta){
+                        animation_frame += 1
+                        animation_frame %= (tag.to - tag.from)
+                    }
+                    log_texture_frame(texture, frames, tag.from + animation_frame, scale)
+                }
+            }
+            else {
+                log_texture(texture, scale)
+            }
+        }
 
         timer_update(&reload_timer, delta)
         if reload_timer.running {
@@ -220,7 +410,9 @@ run :: proc(error: bool, error_string: string, previous_state: []byte, game_allo
 
         if error {
             rl.DrawRectangleV({}, render_size(), rl.ColorAlpha(rl.BLACK, .8))
-            rl.DrawTextEx(state.default_font, fmt.ctprint(error_string), {}, FONT_SIZE, 1, rl.ColorBrightness(rl.RED, .2))
+            screen := fullscreen_rect()
+            error_color := rl.ColorBrightness(rl.RED, .2)
+            ui_draw_textblock(error_string, screen, error_color, state.default_font)
         }
 
         rl.DrawFPS(0, 0)
@@ -264,9 +456,9 @@ editor :: proc(delta: f32){
         {
             if rl.IsKeyPressed(.Q) do state.tileset_index -= 1
             if rl.IsKeyPressed(.E) do state.tileset_index += 1
-            state.tileset_index %%= sa.len(state.tilesets)
+            state.tileset_index %%= len(state.tilesets)
         }
-        tileset := sa.slice(&state.tilesets)[state.tileset_index]
+        tileset := state.tilesets[TilesetType(state.tileset_index)]
 
         world_mouse := rl.GetScreenToWorld2D(rl.GetMousePosition(), camera^)
 
@@ -313,6 +505,7 @@ editor :: proc(delta: f32){
     }
 }
 
+LOG_PADDING :: 10
 log_y_offset: int
 log :: proc(args: ..any, sep := " "){
     str := fmt.ctprint(..args, sep=sep)
@@ -329,6 +522,12 @@ log_color :: proc(color: rl.Color){
     log_y_offset += FONT_SIZE + 10
 }
 
+log_texture :: proc(texture: rl.Texture, scale: f32 = 1){
+    start := [2]f32 { LOG_PADDING, f32(log_y_offset) }
+    log_y_offset += int(f32(texture.height) * scale) + LOG_PADDING
+    rl.DrawTextureEx(texture, start, 0, scale, rl.WHITE)
+}
+
 log_image :: proc(data: []rl.Color, width, height: int, pixel_size: int) {
     start := [2]f32 { 20, f32(log_y_offset) }
     log_y_offset += pixel_size * int(height) + 10
@@ -341,4 +540,30 @@ log_image :: proc(data: []rl.Color, width, height: int, pixel_size: int) {
             rl.DrawRectangleV(start + pos, f32(pixel_size), color)
         }
     }
+}
+
+log_texture_frame :: proc(texture: rl.Texture, frames, frame: int, scale: f32 = 1){
+    start := [2]f32 { LOG_PADDING, f32(log_y_offset) }
+    log_y_offset += int(f32(texture.height) * scale) + LOG_PADDING
+    draw_frame(texture, start, frames, frame, scale)
+}
+
+draw_frame :: proc(texture: rl.Texture, position: [2]f32, frames, frame: int, scale: f32 = 1){
+    cel_width := f32(texture.width) / f32(frames)
+    cel_height := f32(texture.height)
+    source := rl.Rectangle {
+        cel_width * f32(frame),
+        0,
+        cel_width,
+        cel_height
+    }
+
+    destination := rl.Rectangle {
+        position.x,
+        position.y,
+        cel_width * scale,
+        cel_height * scale
+    }
+
+    rl.DrawTexturePro(texture, source, destination, {}, 0, rl.WHITE)
 }
