@@ -34,8 +34,16 @@ TextureType :: enum {
     Crate_Hydrogen,
     Crate_Beef,
     Crate_Medical_Supplies,
-    Crate_Argon,
-    Crate_Titanium
+    Crate_Titanium,
+    Crate_Fertilizer,
+    Crate_Repair,
+    Crate_Arcade_Cabinet,
+
+    Crate_SpiderRobot_Low,
+    SpiderRobot_Base,
+    Crate_SpiderRobot_High,
+
+    Crate_Gold,
 }
 
 when RELEASE {
@@ -58,7 +66,8 @@ set_window_state :: proc(rawptr){}
 
 ShaderType :: enum {
     Grid,
-    Tilemap
+    Tilemap,
+    Pixel,
 }
 
 FONT_SIZE :: 28
@@ -85,6 +94,8 @@ Tag :: struct {
 
 GameState :: struct {
     camera: rl.Camera2D,
+    target_zoom: f32,
+
     initialized: bool,
 
     tilemap: Tilemap,
@@ -98,12 +109,18 @@ GameState :: struct {
 
     textures: [TextureType]rl.Texture,
     tags: [TextureType][TagType]Tag,
-    frames: [TextureType]int
+    frames: [TextureType]int,
+
+    robot_inside: bool,
+    crate_position: [2]f32,
+
+    draw_commands: [Layer][dynamic]DrawCommand `fs:"-"`,
+
+    elapsed: f32
 }
 state: ^GameState
 
 texture_load_paths :: [TextureType][2]string {
-    .Crate_Argon =                  { "crate.aseprite", "argon" },
     .Crate_Astantine =              { "crate.aseprite", "astantine" },
     .Crate_Titanium =               { "crate.aseprite", "titanium" },
     .Crate_Hydrogen =               { "crate.aseprite", "hydrogen" },
@@ -112,6 +129,16 @@ texture_load_paths :: [TextureType][2]string {
     .Crate_Nanobots =               { "crate.aseprite", "nanobots" },
     .Crate_Scrap =                  { "crate.aseprite", "scrap" },
     .Crate_Medical_Supplies =       { "crate.aseprite", "medical_supplies" },
+    .Crate_Fertilizer =             { "crate.aseprite", "fertilizer" },
+    .Crate_Repair =                 { "crate.aseprite", "repaircrate" },
+    .Crate_Arcade_Cabinet =         { "crate.aseprite", "arcade_cabinet" },
+
+    .Crate_SpiderRobot_Low =       { "crate.aseprite", "spider_robot_crate_low" },
+    .SpiderRobot_Base =            { "crate.aseprite", "spider_robot" },
+    .Crate_SpiderRobot_High =    { "crate.aseprite", "spider_robot_crate_high" },
+
+    .Crate_Gold =                   { "crate.aseprite", "gold"},
+
     .Player =                       { "player.aseprite", "-" }
 }
 
@@ -208,6 +235,8 @@ load_aseprite :: proc(filename: string){
 
             texture_type := get_texture_type(name, layer_name) or_continue
 
+            fmt.println(texture_type)
+
             if len(cel.raw) == 0 do continue
             image := rl.Image {
                 data = &cel.raw[0],
@@ -217,15 +246,18 @@ load_aseprite :: proc(filename: string){
                 mipmaps = 1
             }
             texture := rl.LoadTextureFromImage(image)
+            rl.SetTextureFilter(texture, .BILINEAR)
 
             state.textures[texture_type] = texture
+            state.frames[texture_type] = 1
         }
     }
     else if texture_type, found := get_texture_type(name, "-"); found {
 
         sprite_info := utils.Sprite_Info {
             size = { info.md.width, info.md.height },
-            count = len(info.frames)
+            count = len(info.frames),
+            spacing = { 1, 1 }
         }
         sheet, sheet_err := utils.create_sprite_sheet_from_info(info, sprite_info)
 
@@ -238,6 +270,7 @@ load_aseprite :: proc(filename: string){
         }
 
         sheet_texture := rl.LoadTextureFromImage(sheet_image)
+        rl.SetTextureFilter(sheet_texture, .BILINEAR)
 
         state.textures[texture_type] = sheet_texture
         for &tag in info.tags {
@@ -328,6 +361,7 @@ run :: proc(error: bool, error_string: string, previous_state: []byte, game_allo
 
     state.shaders[.Grid] = load_shader("game/grid_vertex.glsl", "game/grid_fragment.glsl")
     state.shaders[.Tilemap] = load_shader("", "game/tilemap_fragment.glsl")
+    state.shaders[.Pixel] = load_shader("", "game/pixel_fragment.glsl")
 
     state.default_font = rl.LoadFontEx("game/PCTL.ttf", FONT_SIZE, nil, 0)
     defer rl.UnloadFont(state.default_font)
@@ -344,6 +378,7 @@ run :: proc(error: bool, error_string: string, previous_state: []byte, game_allo
         rl.ClearBackground(rl.BLACK)
 
         delta := rl.GetFrameTime()
+        state.elapsed += delta
 
         // reloading files
         {
@@ -371,35 +406,78 @@ run :: proc(error: bool, error_string: string, previous_state: []byte, game_allo
             get_default_state()
         }
 
+        // crate
+        {
+            if rl.IsKeyPressed(.M) do state.robot_inside ~= true
+            if rl.IsKeyPressed(.Q) do state.crate_position = {}
+
+            state.crate_position += get_movement() * delta * 100
+
+            draw_texture(.Low, .Crate_SpiderRobot_Low, state.crate_position, 1)
+            if state.robot_inside {
+                draw_texture(.Low, .SpiderRobot_Base, state.crate_position - { 2, 0 }, 1)
+            }
+            draw_texture(.High, .Crate_SpiderRobot_High, state.crate_position, 1)
+        }
+        // player
+        {
+            @static animation_timer: Timer
+            if !animation_timer.running do animation_timer = timer_start(.1, true)
+
+            @static frame: int
+
+            tag := state.tags[.Player][.Intro]
+
+            if timer_update(&animation_timer, delta){
+                frame += 1
+                frame %= tag.to - tag.from
+            }
+
+            player_size := f32(int(state.textures[.Player].width) / state.frames[.Player])
+
+            for i in 0..< 100 {
+                for j in 0..<100 {
+                    pos := [2]f32 { f32(i), f32(j) } * player_size
+                    rotation := linalg.sin(state.elapsed)
+                    draw_texture(.Middle, .Player, pos, 1, frame = tag.from + frame, rotation = rotation)
+                }
+            }
+        }
 
 
+
+        // render
         rl.BeginMode2D(state.camera)
 
         editor(delta)
+        render(&state.draw_commands)
 
         rl.EndMode2D()
 
-        for texture, type in state.textures {
-            scale :f32 = 3
-            frames: int = state.frames[type]
-            if frames > 0 {
-                current_animation := TagType.Intro
-                @static animation_frame: int
-                @static timer: Timer
-                if !timer.running do timer = timer_start(.1, true)
 
-                tag := state.tags[type][current_animation]
-                range := tag.to - tag.from
-                if range > 0 {
-                    if timer_update(&timer, delta){
-                        animation_frame += 1
-                        animation_frame %= (tag.to - tag.from)
+        if false {
+            for texture, type in state.textures {
+                scale :f32 = 3
+                frames: int = state.frames[type]
+                if frames > 0 {
+                    current_animation := TagType.Intro
+                    @static animation_frame: int
+                    @static timer: Timer
+                    if !timer.running do timer = timer_start(.1, true)
+
+                    tag := state.tags[type][current_animation]
+                    range := tag.to - tag.from
+                    if range > 0 {
+                        if timer_update(&timer, delta){
+                            animation_frame += 1
+                            animation_frame %= (tag.to - tag.from)
+                        }
+                        log_texture_frame(texture, frames, tag.from + animation_frame, scale)
                     }
-                    log_texture_frame(texture, frames, tag.from + animation_frame, scale)
                 }
-            }
-            else {
-                log_texture(texture, scale)
+                else {
+                    log_texture(texture, scale)
+                }
             }
         }
 
@@ -450,7 +528,7 @@ editor :: proc(delta: f32){
     }
 
     // tilemap
-    {
+    if false {
         brush: Brush
 
         {
@@ -487,15 +565,17 @@ editor :: proc(delta: f32){
     }
 
     { // camera controls
-        if rl.IsMouseButtonDown(.LEFT) && rl.IsKeyDown(.LEFT_SHIFT) {
+        if rl.IsMouseButtonDown(.MIDDLE){
             mouse_translation := rl.GetMouseDelta()
             camera.target -= mouse_translation / camera.zoom
         }
+        camera.zoom = damp(camera.zoom, state.target_zoom, f32(10), delta)
 
         ctrl_down := rl.IsKeyDown(.LEFT_CONTROL)
         if wheel_movement := rl.GetMouseWheelMove(); wheel_movement != 0 && !ctrl_down {
             zoom_delta := wheel_movement * .07 * camera.zoom
-            camera.zoom = linalg.clamp(camera.zoom + zoom_delta, .001, 20)
+            state.target_zoom = linalg.clamp(state.target_zoom + zoom_delta, .001, 20)
+            // camera.zoom = target_zoom
 
             world_mouse := rl.GetScreenToWorld2D(rl.GetMousePosition(), camera^)
 
