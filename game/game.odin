@@ -11,6 +11,8 @@ import "core:mem"
 import "core:strings"
 import "core:math/linalg"
 import "core:thread"
+import ma "vendor:miniaudio"
+import b2 "vendor:box2d"
 import "core:slice"
 import rl "vendor:raylib"
 import "vendor:raylib/rlgl"
@@ -19,6 +21,7 @@ import ase "odin-aseprite"
 import "odin-aseprite/utils"
 import "core:path/filepath"
 import "core:path/slashpath"
+import "vendor:sdl3"
 
 RELEASE :: #config(RELEASE, false)
 
@@ -44,6 +47,9 @@ TextureType :: enum {
     Crate_SpiderRobot_High,
 
     Crate_Gold,
+
+    Crate_Blue_Fertilizer,
+    Crate_Orange_Fertilizer
 }
 
 when RELEASE {
@@ -68,9 +74,10 @@ ShaderType :: enum {
     Grid,
     Tilemap,
     Pixel,
+    SDF
 }
 
-FONT_SIZE :: 28
+FONT_SIZE :: 64
 
 TagType :: enum {
     Intro,
@@ -104,7 +111,7 @@ GameState :: struct {
     tileset_index: int,
     brush_size: int,
 
-    shaders: [ShaderType]ShaderInterface `fs:"-"`,
+    shaders: [ShaderType]ShaderInterface,
     default_font: rl.Font,
 
     textures: [TextureType]rl.Texture,
@@ -116,7 +123,14 @@ GameState :: struct {
 
     draw_commands: [Layer][dynamic]DrawCommand `fs:"-"`,
 
-    elapsed: f32
+    elapsed: f32,
+    delta: f32,
+
+    gamepad: ^sdl3.Gamepad,
+
+    ui_state: UIState `fs:"-"`,
+
+    slideshow: SlideShow
 }
 state: ^GameState
 
@@ -133,11 +147,14 @@ texture_load_paths :: [TextureType][2]string {
     .Crate_Repair =                 { "crate.aseprite", "repaircrate" },
     .Crate_Arcade_Cabinet =         { "crate.aseprite", "arcade_cabinet" },
 
-    .Crate_SpiderRobot_Low =       { "crate.aseprite", "spider_robot_crate_low" },
-    .SpiderRobot_Base =            { "crate.aseprite", "spider_robot" },
-    .Crate_SpiderRobot_High =    { "crate.aseprite", "spider_robot_crate_high" },
+    .Crate_SpiderRobot_Low =        { "crate.aseprite", "spider_robot_crate_low" },
+    .SpiderRobot_Base =             { "crate.aseprite", "spider_robot" },
+    .Crate_SpiderRobot_High =       { "crate.aseprite", "spider_robot_crate_high" },
 
     .Crate_Gold =                   { "crate.aseprite", "gold"},
+
+    .Crate_Blue_Fertilizer =        { "crate.aseprite", "blue_fertilizer"},
+    .Crate_Orange_Fertilizer =        { "crate.aseprite", "orange_fert"},
 
     .Player =                       { "player.aseprite", "-" }
 }
@@ -156,14 +173,25 @@ tileset_load_paths :: [TilesetType][2]string {
     .Block = { "test.aseprite", "block" }
 }
 
-get_default_state :: proc() {
+@rodata
+shader_load_paths := [ShaderType][2]string {
+    .Grid =     {"game/grid_vertex.glsl", "game/grid_fragment.glsl"},
+    .Tilemap =  {"", "game/tilemap_fragment.glsl"},
+    .Pixel =    {"", "game/pixel_fragment.glsl"},
+    .SDF =      {"", "game/sdf_fragment.glsl"},
+}
 
-    state^ = {}
+values :: [3]int {
+    1, 2, 3
+}
+
+init_state :: proc(state: ^GameState) {
 
     state.camera = rl.Camera2D {
         zoom = 1,
         target = {}
     }
+    state.target_zoom = 1
 
     // tilemap
     if true {
@@ -195,6 +223,14 @@ get_default_state :: proc() {
     load_aseprite("game/test.aseprite")
     load_aseprite("game/player.aseprite")
     load_aseprite("game/crate.aseprite")
+
+    for files, type in shader_load_paths {
+        state.shaders[type] = load_shader(files.x, files.y)
+    }
+
+    type := ShaderType.Grid
+
+    x := shader_load_paths[type]
 
     state.initialized = true
 }
@@ -231,11 +267,10 @@ load_aseprite :: proc(filename: string){
         cels := info.frames[0].cels
 
         for cel in cels {
-            layer_name := info.layers[cel.layer].name
+            layer := info.layers[cel.layer]
 
-            texture_type := get_texture_type(name, layer_name) or_continue
+            texture_type := get_texture_type(name, layer.name) or_continue
 
-            fmt.println(texture_type)
 
             if len(cel.raw) == 0 do continue
             image := rl.Image {
@@ -246,8 +281,34 @@ load_aseprite :: proc(filename: string){
                 mipmaps = 1
             }
             texture := rl.LoadTextureFromImage(image)
-            rl.SetTextureFilter(texture, .BILINEAR)
+            // rl.SetTextureFilter(texture, .BILINEAR)
 
+            state.textures[texture_type] = texture
+            state.frames[texture_type] = 1
+        }
+        // check groups
+        for layer in info.layers {
+            if !layer.is_group do continue
+
+            texture_type := get_texture_type(name, layer.name) or_continue
+
+            buffer := make([]byte, info.md.width * info.md.height * 4)
+
+            for cel in cels {
+                cel_layer := info.layers[cel.layer]
+                if cel_layer.group != layer.name do continue
+                utils.write_cel(buffer, cel, cel_layer, info.md, info.palette) or_continue
+            }
+
+            image := rl.Image {
+                data = &buffer[0],
+                width = i32(info.md.width),
+                height = i32(info.md.height),
+                format = .UNCOMPRESSED_R8G8B8A8,
+                mipmaps = 1
+            }
+            texture := rl.LoadTextureFromImage(image)
+            // rl.SetTextureFilter(texture, .BILINEAR)
             state.textures[texture_type] = texture
             state.frames[texture_type] = 1
         }
@@ -270,7 +331,7 @@ load_aseprite :: proc(filename: string){
         }
 
         sheet_texture := rl.LoadTextureFromImage(sheet_image)
-        rl.SetTextureFilter(sheet_texture, .BILINEAR)
+        // rl.SetTextureFilter(sheet_texture, .BILINEAR)
 
         state.textures[texture_type] = sheet_texture
         for &tag in info.tags {
@@ -343,6 +404,12 @@ render_size :: proc() -> [2]f32 {
 @export
 run :: proc(error: bool, error_string: string, previous_state: []byte, game_allocator, state_allocator: runtime.Allocator) -> (current_state: []byte, reload: bool) {
 
+    def := b2.DefaultWorldDef()
+
+    cf := ma.engine_config_init()
+    // engine: ma.engine
+    // ma.engine_init(&cf, &engine)
+
     context.allocator = game_allocator
 
     state = new(GameState)
@@ -356,16 +423,35 @@ run :: proc(error: bool, error_string: string, previous_state: []byte, game_allo
     }
 
     if !state.initialized {
-        get_default_state()
+        init_state(state)
     }
 
-    state.shaders[.Grid] = load_shader("game/grid_vertex.glsl", "game/grid_fragment.glsl")
-    state.shaders[.Tilemap] = load_shader("", "game/tilemap_fragment.glsl")
-    state.shaders[.Pixel] = load_shader("", "game/pixel_fragment.glsl")
+    {
+        font := &state.default_font
+        font.baseSize = FONT_SIZE
+        font.glyphCount = 95
+        font_data := #load("PCTL.ttf")
+        font.glyphs = rl.LoadFontData(&font_data[0], i32(len(font_data)), FONT_SIZE, nil, 0, .SDF)
+        atlas := rl.GenImageFontAtlas(font.glyphs, &font.recs, 95, FONT_SIZE, 0, 1)
+        font.texture = rl.LoadTextureFromImage(atlas)
+        rl.UnloadImage(atlas)
+        rl.SetTextureFilter(font.texture, .BILINEAR)
+        // state.default_font = rl.LoadFontEx("game/PCTL.ttf", FONT_SIZE, nil, 0)
 
-    state.default_font = rl.LoadFontEx("game/PCTL.ttf", FONT_SIZE, nil, 0)
+    }
     defer rl.UnloadFont(state.default_font)
 
+
+    // sdl init
+    {
+        sdl3.SetHint(sdl3.HINT_JOYSTICK_DIRECTINPUT, "0")
+        sdl3.SetHint(sdl3.HINT_XINPUT_ENABLED, "0")
+        sdl3.SetHint(sdl3.HINT_JOYSTICK_WGI, "1")
+        sdl3.SetHint(sdl3.HINT_JOYSTICK_RAWINPUT, "0")
+        sdl3.SetHint(sdl3.HINT_JOYSTICK_HIDAPI, "0")
+        ok := sdl3.Init({.GAMEPAD})
+        assert(ok)
+    }
     start_time := time.now()
 
     reload_timer := timer_start(1.5, false)
@@ -374,10 +460,23 @@ run :: proc(error: bool, error_string: string, previous_state: []byte, game_allo
     defer stop_file_checker()
 
     for !rl.WindowShouldClose(){
+        {
+            sdl3.UpdateGamepads()
+            if !sdl3.HasGamepad() do state.gamepad = nil
+            if state.gamepad == nil {
+                count: i32
+                ids := sdl3.GetGamepads(&count)
+                for id in ids[:count] {
+                    state.gamepad = sdl3.OpenGamepad(id)
+                    if state.gamepad != nil do break
+                }
+            }
+        }
         rl.BeginDrawing()
         rl.ClearBackground(rl.BLACK)
 
         delta := rl.GetFrameTime()
+        state.delta = delta
         state.elapsed += delta
 
         // reloading files
@@ -393,17 +492,27 @@ run :: proc(error: bool, error_string: string, previous_state: []byte, game_allo
                     load_aseprite(file.fullpath)
                 }
                 if strings.has_suffix(file.name, ".glsl"){
-                    for &shader in state.shaders {
-                        interface_check_reload(&shader)
+                    for shader_files, type in shader_load_paths {
+
+                        match: bool
+                        for shader_file in shader_files {
+                            if !strings.has_suffix(shader_file, file.name) do continue
+                            match = true
+                        }
+                        if !match do continue
+                        state.shaders[type] = load_shader(shader_files.x, shader_files.y)
                     }
                 }
             }
         }
 
-
+        if rl.IsGamepadButtonPressed(0, .RIGHT_TRIGGER_2){
+            sdl3.RumbleGamepadTriggers(state.gamepad, 0, 20_000, 500)
+        }
 
         if rl.IsKeyPressed(.TAB){
-            get_default_state()
+            rl.EndDrawing()
+            return {}, true
         }
 
         // crate
@@ -417,7 +526,8 @@ run :: proc(error: bool, error_string: string, previous_state: []byte, game_allo
             if state.robot_inside {
                 draw_texture(.Low, .SpiderRobot_Base, state.crate_position - { 2, 0 }, 1)
             }
-            draw_texture(.High, .Crate_SpiderRobot_High, state.crate_position, 1)
+            draw_texture(.High, .Crate_SpiderRobot_High, state.crate_position, { 1, 1 })
+            // draw_texture(.High, .Crate_Orange_Fertilizer, state.crate_position, 1)
         }
         // player
         {
@@ -439,20 +549,21 @@ run :: proc(error: bool, error_string: string, previous_state: []byte, game_allo
                 for j in 0..<100 {
                     pos := [2]f32 { f32(i), f32(j) } * player_size
                     rotation := linalg.sin(state.elapsed)
-                    draw_texture(.Middle, .Player, pos, 1, frame = tag.from + frame, rotation = rotation)
+                    draw_texture(.Middle, .Player, pos, { -1, 1 }, frame = tag.from + frame, rotation = rotation)
                 }
             }
         }
-
-
+        slideshow(&state.slideshow, delta)
 
         // render
         rl.BeginMode2D(state.camera)
-
         editor(delta)
-        render(&state.draw_commands)
 
+        render(&state.draw_commands)
         rl.EndMode2D()
+
+        // ui render
+        render(&state.draw_commands, ui = true)
 
 
         if false {
@@ -483,7 +594,7 @@ run :: proc(error: bool, error_string: string, previous_state: []byte, game_allo
 
         timer_update(&reload_timer, delta)
         if reload_timer.running {
-            rl.DrawTextEx(state.default_font, "reloaded", { render_size().x / 2, 0 }, FONT_SIZE, 1, rl.ColorBrightness(rl.GREEN, .2))
+            rl.DrawTextEx(state.default_font, "reloaded", { render_size().x / 2, 0 }, FONT_SIZE/ 2, 1, rl.ColorBrightness(rl.GREEN, .2))
         }
 
         if error {

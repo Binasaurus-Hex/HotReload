@@ -19,7 +19,7 @@ void grid_line(vec2 coord, float block, float thickness, float zoom){
 
 void main(){
     // float thickness = 1.2;
-    float thickness = 3;
+    float thickness = 2;
     thickness /= zoom;
 
     finalColor = vec4(.1);

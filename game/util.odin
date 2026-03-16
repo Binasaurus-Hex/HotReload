@@ -41,6 +41,11 @@ Timer :: struct {
     running: bool
 }
 
+timer_try_start :: proc(timer: ^Timer, time: f32){
+    if timer.running do return
+    timer^ = timer_start(time, false)
+}
+
 timer_start :: proc(time: f32, loop: bool = true) -> Timer {
     return Timer {time, 0, loop, true }
 }

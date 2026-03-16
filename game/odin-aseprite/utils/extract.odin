@@ -442,6 +442,7 @@ get_info :: proc(doc: ^ase.Document, info: ^Info, alloc := context.allocator) ->
                     visiable = .Visiable in c.flags,
                     tileset = int(c.tileset_index),
                     is_background = .Background in c.flags,
+                    is_group = c.type == .Group,
                 }
 
                 when !ASE_USE_BUGGED_SAT {
@@ -461,6 +462,7 @@ get_info :: proc(doc: ^ase.Document, info: ^Info, alloc := context.allocator) ->
                 if c.child_level != 0 {
                     #reverse for l in all_lays {
                         if l.type == .Group {
+                            lay.group = l.name
                             if .Visiable not_in l.flags {
                                 lay.visiable = false
                                 break

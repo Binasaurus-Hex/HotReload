@@ -4,6 +4,7 @@ import rl "vendor:raylib"
 import "core:time"
 import "core:strings"
 // import os "core:os/os2"
+import sa "core:container/small_array"
 import "core:c"
 import "core:fmt"
 
@@ -13,67 +14,23 @@ UniformValue :: union {
 
 ShaderInterface :: struct {
     shader: rl.Shader,
-    uniforms: map[string] UniformValue,
-    uniform_locs: map[string] c.int,
-
-    vertex, fragment : cstring,
-    last_modified_time: c.long
+    uniforms: map[string] UniformValue `fs:"-"`,
+    uniform_locs: map[string] c.int `fs:"-"`,
 }
 
-load_shader :: proc(vertex: cstring, fragment: cstring) -> ShaderInterface {
+load_shader :: proc(vertex: string, fragment: string) -> ShaderInterface {
+
+    vertex_c := strings.clone_to_cstring(vertex, context.temp_allocator)
+    fragment_c := strings.clone_to_cstring(fragment, context.temp_allocator)
+
     interface := ShaderInterface {
-        shader = rl.LoadShader(vertex, fragment),
-        vertex = vertex,
-        fragment = fragment
+        shader = rl.LoadShader(vertex_c, fragment_c),
     }
-    interface.uniforms = make(map[string]UniformValue)
-    interface.uniform_locs = make(map[string]c.int)
-
-    files := []cstring {vertex, fragment}
-    for file in files {
-        if file == nil do continue
-        mod_time := rl.GetFileModTime(file)
-        if mod_time > interface.last_modified_time {
-            interface.last_modified_time = mod_time
-        }
-    }
-
     return interface
 }
 
 unload_shader :: proc(shader: ^ShaderInterface){
     rl.UnloadShader(shader.shader)
-    delete(shader.uniforms)
-    delete(shader.uniform_locs)
-    delete(shader.vertex)
-    delete(shader.fragment)
-}
-
-temp_shader :: proc(from: ShaderInterface) -> ^ShaderInterface {
-    context.allocator = context.temp_allocator
-    interface := new(ShaderInterface)
-    interface.shader = from.shader
-    interface.uniforms = make(map[string]UniformValue)
-    interface.uniform_locs = make(map[string]c.int)
-    return interface
-}
-
-interface_check_reload :: proc(interface: ^ShaderInterface){
-
-    files := []cstring { interface.vertex, interface.fragment }
-    for file in files {
-        if file == nil do continue
-        last_modified_time := rl.GetFileModTime(file)
-        if last_modified_time > interface.last_modified_time {
-            clear(&interface.uniforms)
-            clear(&interface.uniform_locs)
-            new_shader := rl.LoadShader(interface.vertex, interface.fragment)
-            if new_shader == {} do return
-            interface.shader = new_shader
-            interface.last_modified_time = last_modified_time
-            return
-        }
-    }
 }
 
 interface_set_uniforms :: proc(interface: ^ShaderInterface){

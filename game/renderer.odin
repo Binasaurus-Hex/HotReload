@@ -1,19 +1,27 @@
 package game
 import rl "vendor:raylib"
 import "core:math"
+import "core:math/linalg"
+import "core:strings"
+import "core:slice"
 
 Circle :: struct {
     centre: [2]f32,
     radius: f32,
 }
-Rectangle :: distinct [4]f32
 
 DrawTexture :: struct {
     position: [2]f32,
     type: TextureType,
     frame: int,
-    scale: f32,
+    scale: [2]f32,
     rotation: f32
+}
+
+DrawLine :: struct {
+    line: [2][2]f32,
+    color: rl.Color,
+    thickness: f32
 }
 
 DrawCircle :: struct {
@@ -23,12 +31,59 @@ DrawCircle :: struct {
 }
 
 DrawRect :: struct {
-    rect: Rectangle,
+    rect: Rect,
     fill, line: rl.Color
 }
 
+Clip :: struct {
+    begin: bool,
+    rect: Rect,
+}
+
+
+@(deferred_in = shadow_end)
+shadow_begin :: proc(layer: Layer, height: f32){
+    state.ui_state.shadow_start = len(state.draw_commands[layer])
+}
+
+shadow_end :: proc(layer: Layer, height: f32){
+    shadow_commands := state.draw_commands[layer][state.ui_state.shadow_start:]
+    shadow_commands = slice.clone(shadow_commands, context.temp_allocator)
+    for command in shadow_commands {
+        rect_command := command.(DrawRect) or_continue
+        shadow_rect := rect_command.rect + { height, height, 0, 0, }
+        SHADOW_COLOR :: rl.Color { 0, 0, 0, 100 }
+        inject_at(&state.draw_commands[layer], state.ui_state.shadow_start, DrawRect {
+            shadow_rect, SHADOW_COLOR, SHADOW_COLOR
+        })
+    }
+}
+
+clip_rect_begin :: proc(layer: Layer, rect: Rect) {
+    append(&state.draw_commands[layer], Clip { true, rect })
+}
+clip_rect_end :: proc(layer: Layer) {
+    append(&state.draw_commands[layer], Clip { false, {} })
+}
+
+TextFlag :: enum {
+    Wrap,
+    Centre,
+    NoClone,
+}
+
+DrawText :: struct {
+    text: string, // copied
+    rect: Rect,
+    color: rl.Color,
+    font: rl.Font,
+    scale: f32,
+    flags: bit_set[TextFlag],
+    display_length: int,
+}
+
 DrawCommand :: union {
-    DrawCircle, DrawRect, DrawTexture
+    DrawCircle, DrawRect, DrawTexture, DrawText, Clip, DrawLine
 }
 
 
@@ -36,12 +91,17 @@ Layer :: enum {
     Low, Middle, High, UI
 }
 
-draw_circle :: proc(layer: Layer, circle: Circle, fill, line: rl.Color, scale: f32){
-    command: DrawCommand = DrawCircle {circle, scale, fill, line }
+draw_circle :: proc(layer: Layer, circle: Circle, fill, line: rl.Color){
+    command: DrawCommand = DrawCircle {circle, 1, fill, line }
     append(&state.draw_commands[layer], command)
 }
 
-draw_rect :: proc(layer: Layer, rect: Rectangle, fill, line: rl.Color){
+draw_line :: proc(layer: Layer, line: [2][2]f32, color: rl.Color, thickness: f32) {
+    command: DrawCommand = DrawLine { line, color, thickness }
+    append(&state.draw_commands[layer], command)
+}
+
+draw_rect :: proc(layer: Layer, rect: Rect, fill, line: rl.Color){
     command: DrawCommand = DrawRect {rect, fill, line }
     append(&state.draw_commands[layer], command)
 }
@@ -49,38 +109,59 @@ draw_rect :: proc(layer: Layer, rect: Rectangle, fill, line: rl.Color){
 draw_texture :: proc(layer: Layer,
     type: TextureType,
     position: [2]f32,
-    scale :f32 = 1.0,
+    scale :[2]f32 = 1.0,
     rotation: f32 = 0,
     frame: int = 0){
     command: DrawCommand = DrawTexture {position, type, frame, scale, rotation}
     append(&state.draw_commands[layer], command)
 }
 
-render :: proc(commands: ^[Layer][dynamic]DrawCommand){
-
-    @static mode: int = 0
-    if rl.IsKeyPressed(.F) {
-        mode += 1
-        mode %= 3
+draw_text :: proc(layer: Layer, text: string, rect: Rect, color: rl.Color, font: rl.Font = {}, scale :f32 = 1, flags := bit_set[TextFlag]{.Centre}, display_length: int = 0){
+    text := text
+    if .NoClone not_in flags {
+        text = strings.clone(text, context.temp_allocator)
     }
-
-    shader := state.shaders[.Pixel].shader
-    {
-        mode_names := []string{"klems", "iq", "none"}
-        log(mode_names[mode])
-        rl.SetShaderValue(shader, 1, &mode, .INT)
+    command: DrawCommand = DrawText {
+        text, rect, color, font, scale, flags, display_length
     }
-    rl.BeginBlendMode(.ALPHA_PREMULTIPLY)
-    defer rl.EndBlendMode()
-    rl.BeginShaderMode(shader)
+    append(&state.draw_commands[layer], command)
+}
+
+render :: proc(commands: ^[Layer][dynamic]DrawCommand, ui : = false){
+    rl.BeginShaderMode(state.shaders[.SDF].shader)
     defer rl.EndShaderMode()
 
-
-    for &layer_commands in commands {
+    for &layer_commands, layer in commands {
+        if layer == .UI && !ui do continue
+        if layer != .UI && ui do continue
         for &command in layer_commands {
             switch &v in command {
+            case Clip:
+                if v.begin do rl.BeginScissorMode(i32(v.rect.x), i32(v.rect.y), i32(v.rect.z), i32(v.rect.w))
+                else do rl.EndScissorMode()
+            case DrawText:
+                font := v.font
+                if font == {} do font = state.default_font
+                position := v.rect.xy
+                if .Centre in v.flags {
+                    text_size := measure_text(v.text, font) * v.scale
+                    position += (v.rect.zw - text_size.xy) / 2
+                }
+                else if .Wrap in v.flags {
+                    ui_draw_textblock(v.text, v.rect, v.color, font, true, v.display_length, v.scale)
+                    break
+                }
+                draw_text_ex(font, v.text, position, f32(1), v.color, scale = v.scale)
+
             case DrawCircle:
                 rl.DrawCircleV(v.circle.centre, v.circle.radius * v.scale, v.fill)
+            case DrawLine:
+                from, to := v.line.x, v.line.y
+                distance := linalg.distance(from, to)
+                direction := to - from
+                angle := linalg.to_degrees(linalg.atan2(direction.y, direction.x))
+                rectangle := rl.Rectangle { from.x, from.y - v.thickness / 2, distance, v.thickness * 2 }
+                rl.DrawRectanglePro(rectangle, 0, angle, v.color)
             case DrawRect:
                 rl.DrawRectangleRec(transmute(rl.Rectangle)v.rect, v.fill)
             case DrawTexture:
@@ -88,8 +169,10 @@ render :: proc(commands: ^[Layer][dynamic]DrawCommand){
                 frames :=   state.frames[v.type]
                 cel_size := [2]f32 { f32((int(texture.width) / frames) + 1), f32(texture.height) }
 
-                src := rl.Rectangle { cel_size.x * f32(v.frame), 0, cel_size.x, cel_size.y }
-                dst := rl.Rectangle { v.position.x, v.position.y, cel_size.x * v.scale, cel_size.y * v.scale }
+                sign :=  linalg.sign(v.scale)
+
+                src := rl.Rectangle { cel_size.x * f32(v.frame), 0, cel_size.x * sign.x, cel_size.y * sign.y }
+                dst := rl.Rectangle { v.position.x, v.position.y, cel_size.x * v.scale.x, cel_size.y * v.scale.y }
 
                 rotation := math.to_degrees(v.rotation)
 

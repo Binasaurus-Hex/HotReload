@@ -105,6 +105,8 @@ Layer :: struct {
     index:         int,
     blend_mode:    Blend_Mode,
     tileset:       int,
+    is_group:      bool,
+    group:         string
 }
 
 Frame :: struct {
