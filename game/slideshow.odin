@@ -4,12 +4,8 @@ import rl "vendor:raylib"
 import "core:mem"
 import "core:odin/tokenizer"
 import "core:fmt"
+import sa "core:container/small_array"
 import "core:math/linalg"
-
-Stage :: enum {
-    Title,
-    End,
-}
 
 SlideShow :: struct {
     stage:              int,
@@ -17,23 +13,47 @@ SlideShow :: struct {
     stage_timer:    Timer,
     enter: bool,
     delta: f32,
-    modules: [dynamic]Module,
+    modules: [ModuleId]Module,
+    loop: bool,
+
+    pong: Pong,
+}
+
+ModuleId :: enum {
+    LINE,
+    EXE,
+    DLL,
+    FILE,
+    FILE_COPY,
+    STATE,
+}
+
+module_title := #partial [ModuleId]string {
+    .EXE = "exe",
+    .DLL = "dll",
+    .FILE = "game.odin",
+    .FILE_COPY = "copy",
+    .STATE = "state",
 }
 
 ModuleFeature :: enum {
-    File, NoHeader, Block
+    File, NoHeader, Block, Line
 }
+
 Module :: struct {
     features:   bit_set[ModuleFeature],
+
+    // temp
     name:       string,
     code:       string,
     steps:      []string,
+
+    // stored
     active_step: int,
     active:     bool,
     visible:    bool,
     rect:       Rect,
-    default:    Rect,
-    reset:      bool,
+    target_rect: Rect,
 }
 
 TEXT_COLOR :: 0xBFC9DBFF
@@ -82,7 +102,7 @@ slide_text :: proc(
             text = animated
         }
     }
-    color := interpolate_color_hsva(color, id, delta, reset)
+    color := interpolate_color_hsva(color, id, delta, reset, speed = 5)
     scale := interpolate_scale(scale, id, delta, reset)
     draw_text(.UI, text, rect, color, {}, scale, flags, display_length)
 }
@@ -100,6 +120,8 @@ slideshow :: proc(slideshow: ^SlideShow, delta: f32){
         slideshow.stage = clamp(slideshow.stage + offset, 0, 100000)
 
         if rl.IsKeyPressed(.SPACE) do slideshow.stage = 0
+
+        if rl.IsKeyPressed(.L) do slideshow.loop ~= true
     }
 
     content := pad_rect(fullscreen_rect(), 50)
@@ -151,157 +173,156 @@ slideshow :: proc(slideshow: ^SlideShow, delta: f32){
             r := eat_top_rect_ref(&content, 100, 10)
             slide_text(slideshow, v, r, color = colors[i], reset = current, scale = 1.5)
         }
-    case 6..=13:
+    case 6..=15:
 
         title_r := eat_top_rect_ref(&content, 100, 10)
         slide_text(slideshow, "code", title_r, scale = 2)
 
-        modules := make([dynamic]Module, context.temp_allocator)
-        module_append :: proc(modules: ^[dynamic]Module, module: Module) -> int {
-            index := len(modules)
-            append(modules, module)
-            return index
+        init_modules :: proc(slideshow: ^SlideShow){
+            slideshow.modules = {}
+
+            slideshow.modules[.FILE] = {
+                features = {.File},
+                visible = true
+            }
+            slideshow.modules[.FILE_COPY].features = {.File}
+
+            slideshow.modules[.EXE] = {
+                visible = true
+            }
+
+            slideshow.modules[.STATE].features = { .Block }
+
+            slideshow.modules[.LINE].features = { .Line }
         }
 
-        game_file := module_append(&modules, Module {
-            name = "game.odin",
-            features = {.File},
-            code = string(#load("game.odin")),
-            visible = true
-        })
+        if slideshow.stage == 6 && slideshow.enter && slideshow.previous_stage == 5 {
+            init_modules(slideshow)
+        }
 
-        exe := module_append(&modules, Module {
-            name = "exe",
-            steps = { "build", "run" },
-            visible = true
-        })
+        game_file :=    &slideshow.modules[.FILE]
+        exe :=          &slideshow.modules[.EXE]
+        dll :=          &slideshow.modules[.DLL]
+        file_copy :=    &slideshow.modules[.FILE_COPY]
+        gamestate :=    &slideshow.modules[.STATE]
+        line :=         &slideshow.modules[.LINE]
 
-        dll := module_append(&modules, Module {
-            name = "dll",
-            steps = { "check reload", "update", "render" },
-            visible = false
-        })
+        game_file.features = { .File }
+        file_copy.features = { .File }
+        gamestate.features = { .Block }
+        line.features = { .Line }
 
-        file_copy := module_append(&modules, Module {})
-        gamestate := module_append(&modules, Module {name = "state", features = {.Block}})
+        // set dynamic initial state
+        game_file.code = string(#load("game.odin"))
+        file_copy.code = game_file.code
 
+        exe.steps = { "build", "run" }
+        dll.steps = { "check reload", "update", "render" }
+
+        // layout
         middle := pad_rect(centre_rect(content), -{300, 200 })
         top_row := eat_top_rect_ref(&middle, 100, 200)
         bottom_row := eat_top_rect_ref(&middle, 200, 200)
 
         // start places
-        modules[game_file].rect = pad_rect(centre_rect(top_row), -{80, 100 })
+        game_file.target_rect = pad_rect(centre_rect(top_row), -{80, 100 })
         left, right := eat_left_rect(bottom_row, 200, 200)
-        modules[exe].rect = left
-        modules[dll].rect = right
+        exe.target_rect = left
+        dll.target_rect = right
 
         switch slideshow.stage {
         case 6:
-            // default
+            dll.visible = false
+            gamestate.visible = false
+            exe.visible = true
+            exe.active = false
+            file_copy.visible = false
+            file_copy.rect = game_file.rect
+            file_copy.active = false
         case 7:
-            modules[exe].active = true
-            modules[exe].active_step = 0
+            file_copy.visible = true
+            file_copy.target_rect = game_file.rect - { 200, 0, 0, 0 }
+            exe.active = true
+            exe.active_step = 0
+            file_copy.active = true
+            file_copy.features -= {.NoHeader}
         case 8:
-            modules[exe].active = true
-            modules[exe].active_step = 0
+            file_copy.target_rect = exe.rect
+            file_copy.features += {.NoHeader}
+            file_copy.target_rect.zw = 50
+            dll.visible = false
+            dll.rect = file_copy.rect + { 150, 0, 10, 10 }
+            exe.active_step = 0
 
-            file := modules[game_file]
-            file.name = "copy"
-            file.active = true
-            file.default = file.rect
-            file.rect.x -= 200
-            file.reset = slideshow.enter
-            modules[file_copy] = file
         case 9:
-            modules[exe].active = true
-            modules[exe].active_step = 0
+            exe.active_step = -1
+            dll.visible = true
+            file_copy.visible = false
+            dll.active = false
+            line.target_rect.xy = exe.rect.xy + { 200, 100 }
+            line.target_rect.zw = line.target_rect.xy
+            line.rect = line.target_rect
+            line.visible = false
 
-            file := modules[game_file]
-            file.name = "copy"
-            file.rect = modules[exe].rect
-            file.rect.zw = 50
-            file.rect.y += 20
-            file.features += {.NoHeader }
-            modules[file_copy] = file
+            gamestate.visible = false
+
         case 10:
-            modules[dll].visible = true
-            modules[dll].reset = slideshow.enter
-            dll_spawn := modules[exe].rect
-            dll_spawn.zw = 10
-            dll_spawn.x += 200
-            dll_spawn.y += 10
-            modules[dll].default = dll_spawn
-            modules[exe].active = true
-            modules[exe].active_step = -1
-
-            // gamestate
-            modules[gamestate].rect = pad_rect(centre_rect(modules[exe].rect), -50)
-            modules[gamestate].rect.xy += { 0, 100 }
-            modules[gamestate].visible = true
+            exe.active_step = 1
+            dll.active = true
+            dll.active_step = -1
+            line.visible = true
+            line.target_rect.zw = dll.target_rect.xy + { 10, 0 }
+            gamestate.rect.xy = line.target_rect.xy
         case 11:
-            modules[exe].active = true
-            modules[exe].active_step = 1
-            modules[dll].visible = true
-            modules[dll].active = true
-            modules[dll].active_step = int(state.elapsed) % len(modules[dll].steps)
-
-            modify_label_color := rl.ColorBrightness(rl.GetColor(CODE_COMMENT), -.5)
-            modified: bool
-            if modules[dll].active_step == 0 {
-                modify_label_color = rl.GetColor(TEXT_COLOR)
-                modules[game_file].active = true
-            }
-            modify_label :=  modules[game_file].rect
-            modify_label.xy += { 170, -120 }
-
-            slide_text(slideshow, "modified? No", modify_label, id = get_id("modified"), color = modify_label_color, scale = .8)
-
-            exe_actual := state.ui_state.rects[get_id(uintptr(&modules[exe]))]
-            dll_actual := state.ui_state.rects[get_id(uintptr(&modules[dll]))]
-            line := [2][2]f32 { exe_actual.xy + { 190, 90 }, dll_actual.xy + { 0, 10 }}
-
-            modules[gamestate].visible = true
-            modules[gamestate].rect = { line.x.x, line.x.y, 10, 10}
-
-            length := interpolate_scale(1, get_id("run line"), delta, reset = slideshow.enter)
-            draw_line(.UI, scale_line(line, length), rl.GetColor(CODE_HIGHLIGHT), 5)
+            gamestate.visible = true
+            gamestate.target_rect.zw = 40
+            gamestate.target_rect.xy = line.target_rect.zw - { 20, 0 }
         case 12:
+            gamestate.visible = false
+            dll.active_step = int(state.elapsed) % len(dll.steps)
+            game_file.active = dll.active_step == 0
 
-            modules[exe].active = true
-            modules[exe].active_step = 1
-            modules[dll].visible = true
-            modules[dll].active = true
-            modules[dll].active_step = 0
-
-
-
-            modify_label_color := rl.ColorBrightness(rl.GetColor(CODE_COMMENT), -.5)
-            modified: bool
-            if modules[dll].active_step == 0 {
-                modify_label_color = rl.GetColor(TEXT_COLOR)
-                modules[game_file].active = true
+            scale: f32 = .8
+            color := rl.GetColor(CODE_COMMENT)
+            text := "modified?"
+            id := get_id(text)
+            if game_file.active {
+                scale = 1
+                color = rl.GetColor(0xE67D74FF)
+                text = "modified? False"
             }
-            modify_label :=  modules[game_file].rect
-            modify_label.xy += { 170, -120 }
-            slide_text(slideshow, "modified? Yes", modify_label, id = get_id("modified"), color = modify_label_color, scale = .9)
-
-            exe_actual := state.ui_state.rects[get_id(uintptr(&modules[exe]))]
-            dll_actual := state.ui_state.rects[get_id(uintptr(&modules[dll]))]
-            line := [2][2]f32 { exe_actual.xy + { 180, 100 }, dll_actual.xy + { 0, 10 }}
-
-            modules[gamestate].visible = true
-            modules[gamestate].rect = { line.y.x, line.y.y, 10, 10}
-
-            draw_line(.UI, line, rl.GetColor(CODE_HIGHLIGHT), 5)
+            slide_text(slideshow, text, game_file.rect + { 200, 0, 0, 0 }, id = id, scale = scale, color = color, flags = {})
 
         case 13:
-            slideshow.stage = 8
+            dll.active_step = 0
+            game_file.active = true
+
+
+            color := rl.GetColor(0x82AAA3FF)
+            id := get_id("modified?")
+            slide_text(slideshow, "modified? True", game_file.rect + { 200, 0, 0, 0 }, id = id, scale = 1, color = color, flags = {})
+
+        case 14:
+            line.target_rect.zw = line.target_rect.xy + { 10, 0 }
+            gamestate.visible = true
+            gamestate.target_rect.xy = line.target_rect.xy
+            dll.active = false
+            dll.target_rect.xy += { 0, 1000 }
+        case 15:
+            if slideshow.loop do slideshow.stage = 6
+            break
         }
 
-        for &module in modules {
-            slide_draw_module(slideshow, module.rect, &module, slideshow.enter && slideshow.stage == 6)
+        for id in ModuleId {
+            slide_draw_module(slideshow, id)
         }
+    case 16:
 
+        top := eat_top_rect_ref(&content, 50, 10)
+        slide_text(slideshow, "PONG!", top, scale = 2, reset = true)
+
+        game_rect := pad_rect(centre_rect(content), { -409, -300 })
+        run_pong(&slideshow.pong, game_rect, delta)
     }
 }
 
@@ -379,18 +400,34 @@ slide_code :: proc(slideshow: ^SlideShow, code: string, rect: Rect, scale: f32 =
     }
 }
 
-slide_draw_module :: proc(slideshow: ^SlideShow, rect: Rect, module: ^Module, reset: bool){
-    reset := reset || module.reset
+slide_draw_module :: proc(slideshow: ^SlideShow, module_id: ModuleId){
+
+    module := &slideshow.modules[module_id]
+    module.name = module_title[module_id]
+
     if !module.visible do return
-    shadow_begin(.UI, 10)
+
+    shadow_height: f32 = 10
+    if .Line in module.features do shadow_height = 5
+    shadow_begin(.UI, shadow_height)
     id := get_id(uintptr(module))
-    rect := interpolate_rect(rect, id, state.delta, reset, default = module.default, speed = 5)
+
+    module.rect = damp(module.rect, module.target_rect, f32(5), state.delta)
+    rect := module.rect
+
     code_comment := rl.GetColor(CODE_COMMENT)
     background := rl.GetColor(BACKGROUND_5)
     raised := rl.ColorBrightness(background, -.1)
     background_2 := rl.GetColor(0x15212AFF)
     text_color := rl.GetColor(TEXT_COLOR)
     code_highlight := rl.GetColor(CODE_HIGHLIGHT)
+
+    if .Line in module.features {
+        line := transmute([2][2]f32)rect
+        draw_line(.UI, line, code_highlight, 5, rounded = true)
+        return
+    }
+
     draw_rect(.UI, rect, background, background)
 
     if module.active {
@@ -443,8 +480,8 @@ slide_draw_module :: proc(slideshow: ^SlideShow, rect: Rect, module: ^Module, re
         }
         id := get_id(uintptr(&step))
         interpolate_speed :f32 = 5
-        background = interpolate_color_hsva(background, id, state.delta, reset, speed = interpolate_speed)
-        text = interpolate_color_hsva(text, get_id(step), state.delta, reset, speed = interpolate_speed)
+        background = interpolate_color_hsva(background, id, state.delta, false, speed = interpolate_speed)
+        text = interpolate_color_hsva(text, get_id(step), state.delta, false, speed = interpolate_speed)
         line := eat_top_rect_ref(&inner, 50, 4)
         draw_rect(.UI, line, background, background)
         draw_text(.UI, step, line - { 0, 3, 0, 0 }, text, scale = .8)

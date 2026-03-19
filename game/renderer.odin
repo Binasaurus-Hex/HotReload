@@ -21,7 +21,8 @@ DrawTexture :: struct {
 DrawLine :: struct {
     line: [2][2]f32,
     color: rl.Color,
-    thickness: f32
+    thickness: f32,
+    rounded: bool
 }
 
 DrawCircle :: struct {
@@ -47,15 +48,23 @@ shadow_begin :: proc(layer: Layer, height: f32){
 }
 
 shadow_end :: proc(layer: Layer, height: f32){
+    SHADOW_COLOR :: rl.Color { 0, 0, 0, 100 }
     shadow_commands := state.draw_commands[layer][state.ui_state.shadow_start:]
     shadow_commands = slice.clone(shadow_commands, context.temp_allocator)
     for command in shadow_commands {
-        rect_command := command.(DrawRect) or_continue
-        shadow_rect := rect_command.rect + { height, height, 0, 0, }
-        SHADOW_COLOR :: rl.Color { 0, 0, 0, 100 }
-        inject_at(&state.draw_commands[layer], state.ui_state.shadow_start, DrawRect {
-            shadow_rect, SHADOW_COLOR, SHADOW_COLOR
-        })
+        #partial switch v in command {
+        case DrawRect:
+            command := v
+            command.rect += { height, height, 0, 0, }
+            command.fill = SHADOW_COLOR
+            inject_at(&state.draw_commands[layer], state.ui_state.shadow_start, command)
+        case DrawLine:
+            command := v
+            command.line += height
+            command.color = SHADOW_COLOR
+            inject_at(&state.draw_commands[layer], state.ui_state.shadow_start, command)
+        }
+
     }
 }
 
@@ -96,8 +105,8 @@ draw_circle :: proc(layer: Layer, circle: Circle, fill, line: rl.Color){
     append(&state.draw_commands[layer], command)
 }
 
-draw_line :: proc(layer: Layer, line: [2][2]f32, color: rl.Color, thickness: f32) {
-    command: DrawCommand = DrawLine { line, color, thickness }
+draw_line :: proc(layer: Layer, line: [2][2]f32, color: rl.Color, thickness: f32, rounded: bool = false) {
+    command: DrawCommand = DrawLine { line, color, thickness, rounded }
     append(&state.draw_commands[layer], command)
 }
 
@@ -157,11 +166,27 @@ render :: proc(commands: ^[Layer][dynamic]DrawCommand, ui : = false){
                 rl.DrawCircleV(v.circle.centre, v.circle.radius * v.scale, v.fill)
             case DrawLine:
                 from, to := v.line.x, v.line.y
-                distance := linalg.distance(from, to)
-                direction := to - from
+
+                displacement := to - from
+                distance := linalg.length(displacement)
+                direction := displacement / distance
+
+                if v.rounded {
+                    to -= direction * v.thickness
+                    from += direction * v.thickness
+                    distance -= v.thickness * 2
+
+                    rl.DrawCircleV(from, v.thickness, v.color)
+                    rl.DrawCircleV(to, v.thickness, v.color)
+                }
+
                 angle := linalg.to_degrees(linalg.atan2(direction.y, direction.x))
-                rectangle := rl.Rectangle { from.x, from.y - v.thickness / 2, distance, v.thickness * 2 }
+                start := from
+                start -= [2]f32 { -direction.y, direction.x } * v.thickness
+                rectangle := rl.Rectangle { start.x, start.y, distance, v.thickness * 2 }
                 rl.DrawRectanglePro(rectangle, 0, angle, v.color)
+
+
             case DrawRect:
                 rl.DrawRectangleRec(transmute(rl.Rectangle)v.rect, v.fill)
             case DrawTexture:
